@@ -41,7 +41,10 @@ from urllib.parse import urljoin, urlparse
 from playwright.sync_api import sync_playwright
 
 BASE = "https://www.kaohoon.com"
-ARTICLE_RE = re.compile(r"/(news|breakingnews)/(\d+)(?:/|$)")
+# Kaohoon item URLs are /{section}/{id}, where section may be nested:
+# news, breakingnews, summary, column, infographic, news/local, ...
+# (found 2026-09-15: everything except news/breakingnews was being dropped).
+ARTICLE_RE = re.compile(r"^/([a-z][a-z-]*(?:/[a-z][a-z-]*)*)/(\d+)/?$")
 BLOCK_MARKERS = (
     "just a moment", "attention required", "captcha", "cf-chl",
     "access denied", "verify you are human", "are you a robot",
@@ -191,27 +194,33 @@ def fetch(page, store: Store, url: str, delay: float) -> dict:
 
 LISTING_JS = r"""
 () => {
-  const re = /\/(news|breakingnews)\/(\d+)(\/|$)/;
-  const seen = new Map();
-  for (const a of document.querySelectorAll('a[href]')) {
-    const href = a.href;
-    if (!re.test(new URL(href).pathname)) continue;
-    const card = a.closest('article, li, .post, .item, .card, div') || a;
+  // Primary: WordPress listing cards <div class="post-item post-{id} ...">.
+  // 12 per page on /tag/{slug}/page/{N} (verified 2026-09-15 on BANPU pages 1 and 40).
+  // Scoped to the .posts-items list: the site-wide news ticker and sidebars
+  // also contain article links that do NOT belong to this tag.
+  const re = /^\/([a-z][a-z-]*(?:\/[a-z][a-z-]*)*)\/(\d+)\/?$/;
+  const pathOf = h => { try { return new URL(h, document.baseURI).pathname; } catch (e) { return ''; } };
+  const cards = [...document.querySelectorAll('.posts-items .post-item')];
+  const items = [];
+  const seen = new Set();
+  for (const card of cards) {
+    const idm = (card.className || '').match(/\bpost-(\d+)\b/);
+    const links = [...card.querySelectorAll('a[href]')].filter(a => re.test(pathOf(a.href)));
+    const main = (idm && links.find(a => pathOf(a.href).match(re)[2] === idm[1])) || links[0];
+    if (!main || seen.has(main.href)) continue;
+    seen.add(main.href);
     const t = card.querySelector('time');
-    const entry = seen.get(href) || {url: href, link_texts: [], time_datetime: null,
-                                     time_text: null, card_text: ''};
-    const txt = (a.innerText || a.getAttribute('title') || '').trim();
-    if (txt) entry.link_texts.push(txt);
-    if (t && !entry.time_datetime) {
-      entry.time_datetime = t.getAttribute('datetime');
-      entry.time_text = (t.innerText || '').trim();
-    }
-    if (!entry.card_text) entry.card_text = (card.innerText || '').trim().slice(0, 300);
-    seen.set(href, entry);
+    const texts = [...new Set(links.filter(a => a.href === main.href)
+                  .map(a => (a.innerText || a.getAttribute('title') || '').trim()).filter(Boolean))];
+    items.push({url: main.href, section: pathOf(main.href).match(re)[1],
+                post_id: idm ? idm[1] : null, link_texts: texts,
+                time_datetime: t ? t.getAttribute('datetime') : null,
+                time_text: t ? (t.innerText || '').trim() : null,
+                card_text: (card.innerText || '').trim().slice(0, 300)});
   }
   const pager = [...document.querySelectorAll('a[href]')]
     .map(a => a.href).filter(h => /\/page\/\d+/.test(h));
-  return {items: [...seen.values()], pager_links: [...new Set(pager)].slice(0, 20)};
+  return {items, n_cards: cards.length, pager_links: [...new Set(pager)].slice(0, 20)};
 }
 """
 
@@ -328,6 +337,7 @@ def main() -> int:
             with_headline = sum(1 for i in items if any(len(t) > 15 for t in i["link_texts"]))
             report["q3_listing"] = {
                 "article_links": n,
+                "cards_on_page": listing["n_cards"],
                 "with_headline_text": with_headline,
                 "with_time_element": with_time,
                 "with_date_like_text_in_card": with_text_date,

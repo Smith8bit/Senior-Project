@@ -52,8 +52,8 @@ THAI_MONTHS = {
     "มค": 1, "กพ": 2, "มีค": 3, "เมย": 4, "พค": 5, "มิย": 6,
     "กค": 7, "สค": 8, "กย": 9, "ตค": 10, "พย": 11, "ธค": 12,
 }
-THAI_TEXT_DATE = re.compile(r"(\d{1,2})\s*([\u0E01-\u0E4E]{1,4}\.?[\u0E01-\u0E4E]{0,3}\.?)\s*(\d{2,4})")
-NUM_DATE = re.compile(r"(\d{1,2})[/-](\d{1,2})[/-](\d{4})")
+THAI_TEXT_DATE = re.compile(r"(?<!\d)(\d{1,2})\s*([\u0E01-\u0E4E]{1,4}\.?[\u0E01-\u0E4E]{0,3}\.?)\s*(\d{2,4})")
+NUM_DATE = re.compile(r"(?<!\d)(\d{1,2})[/-](\d{1,2})[/-](\d{4})")
 
 
 def to_ce(year: int) -> int:
@@ -90,7 +90,10 @@ def listing_date(item: dict) -> tuple[date | None, str | None, str | None]:
 
 def article_date(page, store: Store, url: str, delay: float):
     """Fallback: JSON-LD datePublished from the article page."""
-    r = fetch(page, store, url, delay)
+    try:
+        r = fetch(page, store, url, delay)
+    except Exception as e:
+        return None, None, None  # network error: item stays undated, symbol stops safely
     if r["blocked"]:
         return None, None, r["blocked"]
     replay(page, url, r["html"])
@@ -110,12 +113,16 @@ def crawl_symbol(page, store: Store, symbol: str, floor: date, delay: float,
     seen: set[str] = set()
     summary = {"symbol": symbol, "pages": 0, "items": 0, "earliest_date": None,
                "latest_date": None, "stop_reason": None, "order_violations": 0,
-               "article_fallbacks": 0, "started_at": utc_now()}
+               "article_fallbacks": 0, "short_pages": 0, "started_at": utc_now()}
     prev_date: date | None = None
 
     for n in range(1, max_pages + 1):
         url = f"{base}/tag/{slug}" if n == 1 else f"{base}/tag/{slug}/page/{n}"
-        r = fetch(page, store, url, delay)
+        try:
+            r = fetch(page, store, url, delay)
+        except Exception as e:  # timeout, DNS, connection reset: leave symbol unfinished, move on
+            summary["stop_reason"] = f"ERROR page {n}: {type(e).__name__}: {str(e).splitlines()[0][:150]}"
+            break
         if r["blocked"]:
             summary["stop_reason"] = f"BLOCKED page {n}: {r['blocked']}"
             break
@@ -123,12 +130,17 @@ def crawl_symbol(page, store: Store, symbol: str, floor: date, delay: float,
             summary["stop_reason"] = f"HTTP {r['status']} at page {n} (end of listing)"
             break
         replay(page, url, r["html"])
-        items = page.evaluate(LISTING_JS)["items"]
-        items = [i for i in items if i["url"] not in seen]
+        listing = page.evaluate(LISTING_JS)
+        items = [i for i in listing["items"] if i["url"] not in seen]
+        if listing["n_cards"] == 0 and n > 0:
+            summary["stop_reason"] = f"LAYOUT: no .post-item cards at page {n}; listing markup changed?"
+            break
         if not items:
             summary["stop_reason"] = f"no new items at page {n} (end of listing)"
             break
         summary["pages"] = n
+        if listing["n_cards"] != 12:
+            summary["short_pages"] += 1   # expected 12; only the final page may be short
 
         last_d = None
         for idx, item in enumerate(items):
@@ -152,7 +164,9 @@ def crawl_symbol(page, store: Store, symbol: str, floor: date, delay: float,
             m = ARTICLE_RE.search(urlparse(item["url"]).path)
             row = {
                 "symbol_queried": symbol, "page": n, "position": idx,
-                "url": item["url"], "article_id": int(m.group(2)) if m else None,
+                "url": item["url"], "url_section": item.get("section"),
+                "article_id": int(m.group(2)) if m else None,
+                "cards_on_page": listing["n_cards"],
                 "headline": max(item["link_texts"], key=len) if item["link_texts"] else None,
                 "listing_date": d.isoformat() if d else None,
                 "listing_date_raw": raw, "listing_date_source": src,
