@@ -1,0 +1,2 @@
+# Pinned environment shared by PC and Colab (Phase 1.20). Add exact versions as packages are adopted.
+playwright==1.56.0  # after installing on the PC, replace with the exact version from `pip freeze`

@@ -1,0 +1,7 @@
+# Raw scrapes never go into git (they are bundled and uploaded to Drive, Phase 1.16)
+spike_out/
+data/raw/
+bundles/
+__pycache__/
+*.pyc
+.venv/
