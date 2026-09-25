@@ -1,2 +1,11 @@
 # Pinned environment shared by PC and Colab (Phase 1.20). Add exact versions as packages are adopted.
-playwright==1.56.0  # after installing on the PC, replace with the exact version from `pip freeze`
+# Versions below are what is installed in the PC's .venv (Python 3.14.6), read 2026-09-25.
+#
+# Crawl-only (PC). Colab never runs the crawler, so these are not needed there.
+playwright==1.56.0
+greenlet==3.5.6
+pyee==13.0.1
+typing_extensions==4.16.0
+#
+# Analysis stack (pandas, numpy, torch, transformers, scikit-learn, xgboost): not installed yet.
+# Pin each one here, from `pip freeze`, when it is first used, and check the same version installs on Colab.
