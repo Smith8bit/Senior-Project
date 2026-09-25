@@ -232,14 +232,17 @@ def id_of(url: str | None) -> str | None:
 # --------------------------------------------------------------------------
 
 def build_worklist(listings: Path, date_from: str, date_to: str, priority: list[str],
-                   only: list[str] | None) -> list[dict]:
+                   only: list[str] | None, host: str | None = None) -> list[dict]:
     """Unique article URLs in the window. Priority tickers first, then the rest;
     newest first inside each group. An article tagged to several tickers is
-    fetched once."""
+    fetched once. Links to other sites (e.g. a facebook.com video card found in
+    the EA listing, 2026-09-25) are skipped when `host` is given."""
     tags: dict[str, set] = defaultdict(set)
     meta: dict[str, dict] = {}
     for r in read_jsonl(listings):
         if not (date_from <= r["listing_date"] <= date_to):
+            continue
+        if host and urlparse(r["url"]).netloc != host:
             continue
         tags[r["url"]].add(r["symbol_queried"])
         meta.setdefault(r["url"], {"listing_date": r["listing_date"], "article_id": r["article_id"]})
@@ -322,7 +325,8 @@ def cmd_articles(args, out: Path) -> int:
         return 6
     priority = [s.strip().upper() for s in args.priority.split(",") if s.strip()]
     only = priority if args.only_priority else ([s.upper() for s in args.symbols] if args.symbols else None)
-    work = build_worklist(Path(args.listings), args.date_from, args.date_to, priority, only)
+    work = build_worklist(Path(args.listings), args.date_from, args.date_to, priority, only,
+                          urlparse(args.base).netloc)
     store = Store(out)
     arts_path, att_path = out / "articles.jsonl", out / "attempts.jsonl"
     done = {r["url"] for r in read_jsonl(arts_path)}
@@ -425,7 +429,8 @@ def cmd_articles(args, out: Path) -> int:
 def cmd_reparse(args, out: Path) -> int:
     """Rebuild articles.jsonl from stored pages. Keeps tagging info from the work list."""
     store = Store(out)
-    work = {w["url"]: w for w in build_worklist(Path(args.listings), args.date_from, args.date_to, [], None)}
+    work = {w["url"]: w for w in build_worklist(Path(args.listings), args.date_from, args.date_to, [], None,
+                                                urlparse(args.base).netloc)}
     rows, stats = [], defaultdict(int)
     for url, rec in store.index.items():
         if not store.have(url) or rec.get("status") in (404, 410) or url not in work:

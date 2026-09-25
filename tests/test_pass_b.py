@@ -109,6 +109,10 @@ def main():
                 ("BANPU", "news", 100006, "2025-12-31")]
         spec[2] = ("KBANK", "news", 100003, "2024-01-01")
         write_listings(tmp, base, spec)
+        with (tmp / "listings.jsonl").open("a", encoding="utf-8") as f:
+            f.write(json.dumps({"symbol_queried": "EA", "url": "https://www.facebook.com/kaohoononline/videos/712609566582203/",
+                                "article_id": 712609566582203, "listing_date": "2022-04-12",
+                                "url_section": "kaohoononline/videos"}) + "\n")
         n = len(hits(tmp))
         code, out = run(tmp, base, "articles", "--priority", "KBANK,BANPU")
         A = {r["article_id"]: r for r in jl(tmp / "out" / "articles.jsonl")}
@@ -117,6 +121,8 @@ def main():
         check("articles: exit 0", code == 0, out[-800:])
         check("articles: window filter drops 2019-06 item", 100005 not in A and "100005" not in order, order)
         check("articles: shared article fetched once", order.count("100003") == 1, order)
+        check("articles: off-site link (facebook video) skipped",
+              not any("712609566582203" in a["url"] for a in jl(tmp / "out" / "attempts.jsonl")), order)
         check("articles: priority tickers first, newest first", order[:3] == ["100003", "100002", "100006"], order)
         check("articles: ok rows parsed", all(A[i]["parse_status"] == "ok" for i in (100001, 100002, 100003, 100004, 100006)), A.keys())
         check("articles: tagged symbols merged", A[100003]["symbols_tagged"] == ["KBANK", "PTT"], A[100003])
