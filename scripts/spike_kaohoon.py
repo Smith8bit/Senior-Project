@@ -107,6 +107,32 @@ def pick_browser(p, choice: str, exe: str | None) -> tuple[dict, str]:
     )
 
 
+def ensure_terminated(path: Path) -> bool:
+    """Make sure a JSONL file ends with a newline before anything is appended.
+
+    Appending to a file whose last line lost its terminator welds two records
+    onto one line and makes that line unparseable. Seen 2026-09-16: a TU
+    summary and a VGI summary ended up welded on line 68 of symbols.jsonl,
+    and the corruption is silent until something tries to read the file.
+    An editor that trims the final newline on save is enough to cause it.
+    """
+    if not path.exists() or path.stat().st_size == 0:
+        return False
+    with path.open("rb+") as f:
+        f.seek(-1, 2)
+        if f.read(1) == b"\n":
+            return False
+        f.write(b"\n")
+    return True
+
+
+def retryable(rec: dict) -> bool:
+    """A stored response that says nothing about the page: server-side error,
+    block or CAPTCHA. 404 is NOT retryable: it is a real end-of-listing."""
+    status = rec.get("status")
+    return bool(rec.get("blocked")) or status is None or status >= 500
+
+
 class Store:
     """Minimal snapshot store: out/raw/<sha256>.html.gz + out/manifest.jsonl."""
 
@@ -122,7 +148,18 @@ class Store:
                     self.index[rec["url"]] = rec
 
     def have(self, url: str) -> bool:
-        return url in self.index
+        """True only for a stored copy worth reusing.
+
+        Hard rule 6 is about never re-fetching *content*. A transient failure
+        is not content: a Cloudflare 502/503, a block page or a CAPTCHA
+        interstitial cached under the tag URL would otherwise stick to that
+        symbol forever, since the symbol can never get past its own page 1
+        (seen 2026-09-15: a ~4 min outage poisoned 5 tags). Those rows stay in
+        the manifest as an audit trail but are re-fetched; the new row
+        supersedes them because the index is built last-write-wins.
+        """
+        rec = self.index.get(url)
+        return rec is not None and not retryable(rec)
 
     def load(self, url: str) -> str:
         rec = self.index[url]
@@ -138,6 +175,7 @@ class Store:
                 f.write(data)
         rec = {"url": url, "sha256": sha, "bytes_raw": len(data),
                "bytes_gz": path.stat().st_size, **meta}
+        ensure_terminated(self.manifest)
         with self.manifest.open("a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
         self.index[url] = rec
@@ -170,7 +208,7 @@ def fetch(page, store: Store, url: str, delay: float) -> dict:
     if store.have(url):
         rec = store.index[url]
         return {"html": store.load(url), "status": rec.get("status"),
-                "seconds": rec.get("seconds"), "blocked": None, "cached": True}
+                "seconds": rec.get("seconds"), "blocked": rec.get("blocked"), "cached": True}
     time.sleep(delay)
     t0 = time.perf_counter()
     resp = page.goto(url, wait_until="domcontentloaded", timeout=60_000)

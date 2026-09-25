@@ -15,7 +15,9 @@ Date of an item, in order of preference:
 Safeguards:
   - listing order is checked; out-of-order dates are logged as order_violations
   - a symbol also stops on: empty page, HTTP error, block/CAPTCHA, max pages
-  - never re-fetches a stored URL (hard rule 6); scraped_at is UTC (Phase 1.15)
+  - never re-fetches a stored URL (hard rule 6), except one stored as a 5xx or
+    a block: that is an outage, not content, and is retried on the next run
+  - scraped_at is UTC (Phase 1.15)
   - one tab, fixed delay >= 3 s, stops the whole run on any block (Phase 1.19)
 
 Usage:
@@ -45,8 +47,8 @@ from playwright.sync_api import sync_playwright
 
 # Shared helpers live in the spike for now; move to a common module before Pass B.
 from spike_kaohoon import (ARTICLE_RE, BASE, LISTING_JS, BROWSER_ORDER, Store,
-                           fetch, is_article, parse_jsonld, pick_browser,
-                           replay, utc_now)
+                           ensure_terminated, fetch, is_article, parse_jsonld,
+                           pick_browser, replay, utc_now)
 
 THAI_MONTHS = {
     "มค": 1, "กพ": 2, "มีค": 3, "เมย": 4, "พค": 5, "มิย": 6,
@@ -221,6 +223,7 @@ def main() -> int:
         done = {json.loads(l)["symbol"] for l in done_path.read_text(encoding="utf-8").splitlines() if l.strip()}
 
     exit_code = 0
+    ensure_terminated(out / "listings.jsonl")
     with sync_playwright() as p, (out / "listings.jsonl").open("a", encoding="utf-8") as lfh:
         launch_kwargs, browser_label = pick_browser(p, args.browser, args.browser_exe)
         print(f"browser: {browser_label}", file=sys.stderr)
@@ -240,8 +243,12 @@ def main() -> int:
                 print("Blocked: stopping the whole run. Do not retry; see Phase 1.5.")
                 exit_code = 2
                 break
-            natural_end = s["stop_reason"].startswith(("reached floor", "HTTP 4", "no new items"))
+            # 404 is the real end of a tag's pagination. Other 4xx are blocks
+            # (they never reach here, the blocked branch catches them first) and
+            # must not be mistaken for a completed symbol.
+            natural_end = s["stop_reason"].startswith(("reached floor", "HTTP 404", "no new items"))
             if natural_end:
+                ensure_terminated(done_path)
                 with done_path.open("a", encoding="utf-8") as f:
                     f.write(json.dumps(s, ensure_ascii=False) + "\n")
             else:
