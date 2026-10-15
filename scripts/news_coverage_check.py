@@ -1,4 +1,6 @@
-"""Pre-registration A3a: sentiment coverage go/no-go (Phase 1.7).
+"""News coverage check: is there enough Thai news per stock-day for a sentiment feature? Go/no-go.
+
+(Pre-registration item A3a; open-items register Phase 1.7.)
 
 Coverage of a stock = (trading days in its SET50 membership window with >= 1
 Thai article) / (trading days in that window). Verdict from the MEDIAN stock:
@@ -9,12 +11,12 @@ Definitions fixed before running (claude/log-entry-2026-09-30-a3a-coverage.md):
   window         union of the stock's rows in set50_membership.csv
   day of news    hard rule 4: published <= 16:30 ICT on a trading day -> that
                  day, otherwise the next trading day (weekends/holidays roll forward)
-  primary        any Thai article tagged to the stock (Pass A tag page)
+  primary        any Thai article tagged to the stock (Kaohoon tag page, from the article-list crawl)
   S1             primary minus sections summary, column
   S2             S1 and the ticker appears in JSON-LD keywords
   S3             primary and the ticker appears in the headline
 
-  python scripts/coverage_a3a.py
+  python scripts/news_coverage_check.py
 """
 from __future__ import annotations
 
@@ -56,10 +58,10 @@ def band(x: float) -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--articles", default="data/raw/pass_b/articles.jsonl")
+    ap.add_argument("--articles", default="data/raw/kaohoon_articles/articles.jsonl")
     ap.add_argument("--membership", default="data/set50_membership.csv")
     ap.add_argument("--prices", default="data/raw/prices/siamchart/set50_union_2019_2025.csv")
-    ap.add_argument("--out", default="data/derived/a3a_coverage.csv")
+    ap.add_argument("--out", default="data/derived/news_coverage.csv")
     args = ap.parse_args()
 
     cal = [d for d in trading_calendar(Path(args.prices)) if date(2020, 1, 1) <= d <= date(2025, 12, 31)]

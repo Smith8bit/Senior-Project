@@ -1,0 +1,439 @@
+{
+  "computed_at": "2026-10-06T07:40:42+00:00",
+  "inputs": {
+    "sample_sha256": "40a60727b6d8fd1a17d7abfb3ddcdfc0d8ee6ab6fc3584ddd904fcf4005fccc6",
+    "labels_sha256": "0c693969cbaebc3936383556a1f7df809bd88c086d7a5980f469a4d6a1ea4d22",
+    "preds_sha256": "476f33ba5ae0a80fc559c863115f12eab73d702f521d7d1f01df357994dd9ad0",
+    "model": "airesearch/wangchanberta-base-att-spm-uncased@finetuned@wisesight_sentiment",
+    "model_commit": null,
+    "label_mapping_source": "config.id2label"
+  },
+  "primary": {
+    "n": 250,
+    "kappa": -0.0052,
+    "macro_f1": 0.1757,
+    "accuracy": 0.32,
+    "kappa_ci95_bootstrap": [
+      -0.0262,
+      0.0153
+    ],
+    "per_class": {
+      "pos": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "support": 127
+      },
+      "neu": {
+        "precision": 0.3198,
+        "recall": 0.9753,
+        "f1": 0.4817,
+        "support": 81
+      },
+      "neg": {
+        "precision": 0.5,
+        "recall": 0.0238,
+        "f1": 0.0455,
+        "support": 42
+      }
+    },
+    "confusion_rows_human_cols_model": {
+      "pos": {
+        "pos": 0,
+        "neu": 127,
+        "neg": 0
+      },
+      "neu": {
+        "pos": 1,
+        "neu": 79,
+        "neg": 1
+      },
+      "neg": {
+        "pos": 0,
+        "neu": 41,
+        "neg": 1
+      }
+    },
+    "band": "fine-tune or demote to exploratory",
+    "bands": "kappa >= 0.61 use as-is; 0.41 <= kappa < 0.61 usable with limitation; < 0.41 fine-tune or demote",
+    "kappa_prediction": [
+      0.3,
+      0.5
+    ],
+    "kappa_within_prediction": false
+  },
+  "relevance_yes": {
+    "n": 80,
+    "kappa": 0.0163,
+    "macro_f1": 0.167,
+    "accuracy": 0.2,
+    "kappa_ci95_bootstrap": [
+      0.0,
+      0.0523
+    ],
+    "per_class": {
+      "pos": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "support": 55
+      },
+      "neu": {
+        "precision": 0.1899,
+        "recall": 1.0,
+        "f1": 0.3191,
+        "support": 15
+      },
+      "neg": {
+        "precision": 1.0,
+        "recall": 0.1,
+        "f1": 0.1818,
+        "support": 10
+      }
+    },
+    "confusion_rows_human_cols_model": {
+      "pos": {
+        "pos": 0,
+        "neu": 55,
+        "neg": 0
+      },
+      "neu": {
+        "pos": 0,
+        "neu": 15,
+        "neg": 0
+      },
+      "neg": {
+        "pos": 0,
+        "neu": 9,
+        "neg": 1
+      }
+    }
+  },
+  "by_relevance": {
+    "yes": {
+      "n": 80,
+      "kappa": 0.0163,
+      "macro_f1": 0.167,
+      "accuracy": 0.2,
+      "per_class": {
+        "pos": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "support": 55
+        },
+        "neu": {
+          "precision": 0.1899,
+          "recall": 1.0,
+          "f1": 0.3191,
+          "support": 15
+        },
+        "neg": {
+          "precision": 1.0,
+          "recall": 0.1,
+          "f1": 0.1818,
+          "support": 10
+        }
+      },
+      "confusion_rows_human_cols_model": {
+        "pos": {
+          "pos": 0,
+          "neu": 55,
+          "neg": 0
+        },
+        "neu": {
+          "pos": 0,
+          "neu": 15,
+          "neg": 0
+        },
+        "neg": {
+          "pos": 0,
+          "neu": 9,
+          "neg": 1
+        }
+      }
+    },
+    "partly": {
+      "n": 43,
+      "kappa": 0.0,
+      "macro_f1": 0.1358,
+      "accuracy": 0.2558,
+      "per_class": {
+        "pos": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "support": 23
+        },
+        "neu": {
+          "precision": 0.2558,
+          "recall": 1.0,
+          "f1": 0.4074,
+          "support": 11
+        },
+        "neg": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "support": 9
+        }
+      },
+      "confusion_rows_human_cols_model": {
+        "pos": {
+          "pos": 0,
+          "neu": 23,
+          "neg": 0
+        },
+        "neu": {
+          "pos": 0,
+          "neu": 11,
+          "neg": 0
+        },
+        "neg": {
+          "pos": 0,
+          "neu": 9,
+          "neg": 0
+        }
+      }
+    },
+    "no": {
+      "n": 127,
+      "kappa": -0.0235,
+      "macro_f1": 0.1963,
+      "accuracy": 0.4173,
+      "per_class": {
+        "pos": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "support": 49
+        },
+        "neu": {
+          "precision": 0.424,
+          "recall": 0.9636,
+          "f1": 0.5889,
+          "support": 55
+        },
+        "neg": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "support": 23
+        }
+      },
+      "confusion_rows_human_cols_model": {
+        "pos": {
+          "pos": 0,
+          "neu": 49,
+          "neg": 0
+        },
+        "neu": {
+          "pos": 1,
+          "neu": 53,
+          "neg": 1
+        },
+        "neg": {
+          "pos": 0,
+          "neu": 23,
+          "neg": 0
+        }
+      }
+    }
+  },
+  "half_A": {
+    "n": 125,
+    "kappa": -0.0102,
+    "macro_f1": 0.1359,
+    "accuracy": 0.256,
+    "per_class": {
+      "pos": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "support": 67
+      },
+      "neu": {
+        "precision": 0.2581,
+        "recall": 0.9697,
+        "f1": 0.4076,
+        "support": 33
+      },
+      "neg": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "support": 25
+      }
+    },
+    "confusion_rows_human_cols_model": {
+      "pos": {
+        "pos": 0,
+        "neu": 67,
+        "neg": 0
+      },
+      "neu": {
+        "pos": 0,
+        "neu": 32,
+        "neg": 1
+      },
+      "neg": {
+        "pos": 0,
+        "neu": 25,
+        "neg": 0
+      }
+    }
+  },
+  "half_B": {
+    "n": 125,
+    "kappa": 0.002,
+    "macro_f1": 0.2203,
+    "accuracy": 0.384,
+    "per_class": {
+      "pos": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "support": 60
+      },
+      "neu": {
+        "precision": 0.3821,
+        "recall": 0.9792,
+        "f1": 0.5497,
+        "support": 48
+      },
+      "neg": {
+        "precision": 1.0,
+        "recall": 0.0588,
+        "f1": 0.1111,
+        "support": 17
+      }
+    },
+    "confusion_rows_human_cols_model": {
+      "pos": {
+        "pos": 0,
+        "neu": 60,
+        "neg": 0
+      },
+      "neu": {
+        "pos": 1,
+        "neu": 47,
+        "neg": 0
+      },
+      "neg": {
+        "pos": 0,
+        "neu": 16,
+        "neg": 1
+      }
+    }
+  },
+  "model_raw_counts": {
+    "pos": 1,
+    "neu": 247,
+    "neg": 2,
+    "q": 0
+  },
+  "human_counts": {
+    "pos": 127,
+    "neu": 81,
+    "neg": 42
+  },
+  "model_counts": {
+    "pos": 1,
+    "neu": 247,
+    "neg": 2
+  },
+  "describe": {
+    "n": 250,
+    "sentiment_share": {
+      "pos": 0.508,
+      "neu": 0.324,
+      "neg": 0.168
+    },
+    "relevance_share": {
+      "yes": 0.32,
+      "partly": 0.172,
+      "no": 0.508
+    },
+    "relevance_yes_share": 0.32,
+    "relevance_yes_prediction": [
+      0.4,
+      0.6
+    ],
+    "relevance_yes_within_prediction": false,
+    "crosstab_relevance_by_sentiment": {
+      "yes": {
+        "pos": 55,
+        "neu": 15,
+        "neg": 10
+      },
+      "partly": {
+        "pos": 23,
+        "neu": 11,
+        "neg": 9
+      },
+      "no": {
+        "pos": 49,
+        "neu": 55,
+        "neg": 23
+      }
+    },
+    "by_section": {
+      "news": {
+        "n": 110,
+        "relevance_yes": 35,
+        "pos": 69,
+        "neu": 23,
+        "neg": 18
+      },
+      "breakingnews": {
+        "n": 44,
+        "relevance_yes": 24,
+        "pos": 33,
+        "neu": 6,
+        "neg": 5
+      },
+      "column": {
+        "n": 41,
+        "relevance_yes": 2,
+        "pos": 1,
+        "neu": 39,
+        "neg": 1
+      },
+      "summary": {
+        "n": 27,
+        "relevance_yes": 1,
+        "pos": 8,
+        "neu": 1,
+        "neg": 18
+      },
+      "pr": {
+        "n": 19,
+        "relevance_yes": 13,
+        "pos": 7,
+        "neu": 12,
+        "neg": 0
+      },
+      "stockanalysis": {
+        "n": 4,
+        "relevance_yes": 3,
+        "pos": 4,
+        "neu": 0,
+        "neg": 0
+      },
+      "news/company": {
+        "n": 4,
+        "relevance_yes": 2,
+        "pos": 4,
+        "neu": 0,
+        "neg": 0
+      },
+      "infographic": {
+        "n": 1,
+        "relevance_yes": 0,
+        "pos": 1,
+        "neu": 0,
+        "neg": 0
+      }
+    }
+  }
+}

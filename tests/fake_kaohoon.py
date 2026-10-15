@@ -1,4 +1,4 @@
-"""Fake Kaohoon for offline Pass B tests. Serves real stored article HTML plus failure cases.
+"""Fake Kaohoon for offline article-page crawl tests. Serves real stored article HTML plus failure cases.
 
   /news/{id}         id in OK_IDS   -> a real stored Kaohoon article page (200)
                      id 404xxx      -> 404

@@ -1,0 +1,40 @@
+{
+  "predicted_at": "2026-10-06T07:39:36+00:00",
+  "labels_sha256_at_predict": "0c693969cbaebc3936383556a1f7df809bd88c086d7a5980f469a4d6a1ea4d22",
+  "sample_sha256": "40a60727b6d8fd1a17d7abfb3ddcdfc0d8ee6ab6fc3584ddd904fcf4005fccc6",
+  "preds_sha256": "476f33ba5ae0a80fc559c863115f12eab73d702f521d7d1f01df357994dd9ad0",
+  "n": 250,
+  "model_id": "airesearch/wangchanberta-base-att-spm-uncased",
+  "model_revision": "finetuned@wisesight_sentiment",
+  "model_commit": null,
+  "tokenizer_revision": "main",
+  "tokenizer_class": "CamembertTokenizer",
+  "id2label_raw": {
+    "0": "pos",
+    "1": "neu",
+    "2": "neg",
+    "3": "q"
+  },
+  "label_names_used": [
+    "pos",
+    "neu",
+    "neg",
+    "q"
+  ],
+  "label_mapping_source": "config.id2label",
+  "to3": {
+    "pos": "pos",
+    "neu": "neu",
+    "neg": "neg",
+    "q": "neu"
+  },
+  "versions": {
+    "python": "3.12.13",
+    "torch": "2.14.1+cpu",
+    "transformers": "5.18.0",
+    "pythainlp": "5.3.8",
+    "sentencepiece": "0.2.2"
+  },
+  "preprocessing": "thai2transformers 0.1.2 process_transformers (vendored), then headline only",
+  "input": "headline only; no ticker or article text"
+}

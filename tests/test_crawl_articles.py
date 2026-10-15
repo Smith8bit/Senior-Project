@@ -1,6 +1,6 @@
-"""Offline tests for scripts/pass_b.py against tests/fake_kaohoon.py.
+"""Offline tests for scripts/crawl_articles.py against tests/fake_kaohoon.py.
 
-Run from the repo root:  python tests/test_pass_b.py
+Run from the repo root:  python tests/test_crawl_articles.py
 Needs Playwright + a Chromium build, and spike_out/ (stored real Kaohoon pages).
 The polite delay is patched out here only; the real script refuses --delay < 3.
 """
@@ -15,15 +15,15 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
-import pass_b  # noqa: E402
+import crawl_articles  # noqa: E402
 
 RUNNER = f"""
 import sys, time
 sys.path.insert(0, {str(ROOT / 'scripts')!r})
 time.sleep = lambda s: None          # tests only: no polite delay, no pauses
-import pass_b
-sys.argv = ['pass_b.py'] + sys.argv[1:]
-sys.exit(pass_b.main())
+import crawl_articles
+sys.argv = ['crawl_articles.py'] + sys.argv[1:]
+sys.exit(crawl_articles.main())
 """
 
 
@@ -72,15 +72,15 @@ def main():
     arts = [m for m in man if "/tag/" not in m["url"]]
     for m in arts:
         html = gzip.open(ROOT / "spike_out" / "raw" / f"{m['sha256']}.html.gz", "rt", encoding="utf-8").read()
-        r = pass_b.parse_article(html, m["url"])
+        r = crawl_articles.parse_article(html, m["url"])
         check(f"parse {m['url'].rsplit('/', 1)[-1]}: ok, +07:00, th, body",
               r["parse_status"] == "ok" and r["date_published"].endswith("+07:00") and r["language"] == "th"
               and r["body_chars"] > 500 and r["keywords"] and "&#" not in (r["headline"] or ""), r)
     check("parse: page without JSON-LD is layout",
-          pass_b.parse_article("<html><body>x</body></html>", "https://www.kaohoon.com/news/1")["parse_status"] == "layout")
+          crawl_articles.parse_article("<html><body>x</body></html>", "https://www.kaohoon.com/news/1")["parse_status"] == "layout")
     check("parse: entity unescaped",
-          pass_b._text("BANPU &#8220;x&#8221;") == "BANPU “x”")
-    check("language: english", pass_b.language_guess("Kaohoon International reports that the SET index rose today") == "en")
+          crawl_articles._text("BANPU &#8220;x&#8221;") == "BANPU “x”")
+    check("language: english", crawl_articles.language_guess("Kaohoon International reports that the SET index rose today") == "en")
 
     tmp = Path(tempfile.mkdtemp())
     spike = tmp / "spike"

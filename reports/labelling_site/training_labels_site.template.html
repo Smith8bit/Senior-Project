@@ -1,0 +1,283 @@
+<title>Kaohoon Training Labels</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&family=IBM+Plex+Sans+Thai:wght@400;500;600&display=swap">
+<style>
+/* Layout: one centred labelling card on a quiet ground, a price-board style ticker, choices as big tap targets. */
+:root {
+  --bg: #eef0ee; --surface: #ffffff; --ink: #14201d; --ink-2: #4b5753; --muted: #7d8884; --line: #d6dbd8;
+  --accent: #1d5f74; --accent-ink: #ffffff;
+  --up: #16794a; --up-soft: #e3f2ea; --flat: #a86a00; --flat-soft: #fbf0d9; --down: #b8322b; --down-soft: #f8e4e2;
+  --font-ui: "IBM Plex Sans Thai", "Noto Sans Thai", "Leelawadee UI", Tahoma, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #111816; --surface: #19221f; --ink: #e8eeeb; --ink-2: #b3beba; --muted: #86928d; --line: #2c3834;
+  --accent: #5fb0c9; --accent-ink: #0b1513;
+  --up: #4cc58a; --up-soft: #173a2a; --flat: #e0a83a; --flat-soft: #3a2e14; --down: #ef7b72; --down-soft: #3f1d1a;
+  color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #111816; --surface: #19221f; --ink: #e8eeeb; --ink-2: #b3beba; --muted: #86928d; --line: #2c3834;
+  --accent: #5fb0c9; --accent-ink: #0b1513;
+  --up: #4cc58a; --up-soft: #173a2a; --flat: #e0a83a; --flat-soft: #3a2e14; --down: #ef7b72; --down-soft: #3f1d1a;
+  color-scheme: dark }
+* { box-sizing: border-box }
+body { background: var(--bg); color: var(--ink); font-family: var(--font-ui); font-size: 15px; line-height: 1.5 }
+.wrap { max-width: 760px; margin: 0 auto; padding-inline: 16px; padding-block: 18px 40px; display: grid; gap: 14px }
+.top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px }
+.brand { font-weight: 600; font-size: 16px; letter-spacing: .01em }
+.brand small { display: block; font-weight: 400; font-size: 12.5px; color: var(--muted) }
+.sync { font-family: var(--font-mono); font-size: 12px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); color: var(--ink-2); background: var(--surface); white-space: nowrap }
+.sync[data-state="saved"] { color: var(--up); border-color: color-mix(in srgb, var(--up) 40%, var(--line)) }
+.sync[data-state="saving"] { color: var(--flat) }
+.sync[data-state="error"], .sync[data-state="nostore"] { color: var(--down); border-color: color-mix(in srgb, var(--down) 45%, var(--line)) }
+.progress { display: grid; gap: 6px }
+.bar { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden }
+.bar > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .25s ease }
+.stats { display: flex; flex-wrap: wrap; gap: 4px 18px; font-size: 12.5px; color: var(--ink-2); font-variant-numeric: tabular-nums }
+.stats b { color: var(--ink); font-weight: 600 }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px; display: grid; gap: 16px }
+.meta { font-family: var(--font-mono); font-size: 12px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 12px; font-variant-numeric: tabular-nums }
+.meta .done { color: var(--up) }
+.ticker { font-family: var(--font-mono); font-weight: 600; font-size: 22px; letter-spacing: .04em; color: var(--accent) }
+.headline { margin: 0; font-size: clamp(19px, 2.6vw + 10px, 25px); line-height: 1.45; font-weight: 500; text-wrap: pretty; overflow-wrap: anywhere }
+fieldset { border: 0; margin: 0; padding: 0; display: grid; gap: 8px; min-width: 0 }
+legend { padding: 0; font-size: 14px; color: var(--ink-2); margin-bottom: 8px }
+legend b { font-family: var(--font-mono); color: var(--ink) }
+.choices { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px }
+.c { appearance: none; font: inherit; min-height: 54px; border-radius: 10px; border: 1.5px solid var(--line); background: var(--surface); color: var(--ink);
+     display: flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer; font-weight: 500; font-size: 15px; padding: 8px }
+.c kbd { font-family: var(--font-mono); font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px }
+.c:hover { border-color: var(--ink-2) }
+.c:focus-visible, .nav button:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px }
+.c[data-s="pos"].on { background: var(--up-soft); border-color: var(--up); color: var(--up) }
+.c[data-s="neu"].on { background: var(--flat-soft); border-color: var(--flat); color: var(--flat) }
+.c[data-s="neg"].on { background: var(--down-soft); border-color: var(--down); color: var(--down) }
+.c[data-r].on { background: color-mix(in srgb, var(--accent) 14%, var(--surface)); border-color: var(--accent); color: var(--accent) }
+.c.on kbd { color: inherit; border-color: currentColor }
+.c:disabled { opacity: .45; cursor: not-allowed }
+.nav { display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between }
+.nav button { appearance: none; font: inherit; font-size: 14px; border: 1px solid var(--line); background: transparent; color: var(--ink); border-radius: 8px; padding: 9px 14px; cursor: pointer }
+.nav button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent) }
+.nav button:disabled { opacity: .4; cursor: not-allowed }
+.proto { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 12px 16px; font-size: 13.5px; color: var(--ink-2) }
+.proto summary { cursor: pointer; color: var(--ink); font-weight: 500 }
+.proto dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 12px; margin: 10px 0 }
+.proto dt { font-family: var(--font-mono); color: var(--ink) }
+.proto dd { margin: 0 }
+.proto ul { margin: 6px 0 0; padding-left: 18px }
+.foot { font-size: 12.5px; color: var(--muted); margin: 0 }
+.notice { border: 1px solid var(--down); background: var(--down-soft); color: var(--ink); border-radius: 10px; padding: 10px 14px; font-size: 13.5px }
+@media (hover: none) { .c kbd { display: none } }
+@media (prefers-reduced-motion: reduce) { .bar > i { transition: none } }
+</style>
+
+<main class="wrap">
+  <header class="top">
+    <div class="brand">Kaohoon training labels<small>Fine-tuning set for WangchanBERTa · 1,000 headlines · no overlap with the 250-item exam</small></div>
+    <div class="sync" id="sync" data-state="connecting" role="status" aria-live="polite">Connecting…</div>
+  </header>
+
+  <div class="notice" id="notice" hidden></div>
+
+  <section class="progress" aria-label="Progress">
+    <div class="bar"><i id="bar"></i></div>
+    <div class="stats"><span id="count"></span><span id="today"></span><span id="eta"></span></div>
+  </section>
+
+  <article class="card" aria-live="polite">
+    <div class="meta" id="meta"></div>
+    <div class="ticker" id="ticker"></div>
+    <p class="headline" id="headline" lang="th"></p>
+
+    <fieldset id="q1">
+      <legend>1. For a shareholder of <b class="tk"></b>: good news, bad news, or neither?</legend>
+      <div class="choices">
+        <button class="c" data-s="pos" type="button">Good news <kbd>1</kbd></button>
+        <button class="c" data-s="neu" type="button">Neither <kbd>2</kbd></button>
+        <button class="c" data-s="neg" type="button">Bad news <kbd>3</kbd></button>
+      </div>
+    </fieldset>
+
+    <fieldset id="q2">
+      <legend>2. Is the headline mainly about <b class="tk"></b>?</legend>
+      <div class="choices">
+        <button class="c" data-r="yes" type="button">Yes <kbd>Q</kbd></button>
+        <button class="c" data-r="partly" type="button">Partly <kbd>W</kbd></button>
+        <button class="c" data-r="no" type="button">No <kbd>E</kbd></button>
+      </div>
+    </fieldset>
+
+    <nav class="nav">
+      <button id="prev" type="button">← Back</button>
+      <button id="jump" type="button">First unlabelled</button>
+      <button id="next" type="button" class="primary">Next →</button>
+    </nav>
+  </article>
+
+  <details class="proto" id="proto">
+    <summary>Labelling rules (same as the 250-item exam)</summary>
+    <dl id="defs"></dl>
+    <ul>
+      <li>Judge the headline only. Don't open the article.</li>
+      <li>When unsure between good/bad and neither, choose neither.</li>
+      <li>Keep judging the way you did for the exam set, so both sets follow one standard.</li>
+    </ul>
+  </details>
+
+  <p class="foot">Each answer saves to this page's private store as you click, so you can stop and continue on any device. No model output is shown here.</p>
+</main>
+
+<script type="application/json" id="items-data">__ITEMS__</script>
+<script type="application/json" id="proto-data">__PROTO__</script>
+<script>
+(() => {
+  const ITEMS = JSON.parse(document.getElementById("items-data").textContent);
+  const PROTO = JSON.parse(document.getElementById("proto-data").textContent);
+  const N = ITEMS.length;
+  const $ = (id) => document.getElementById(id);
+  const L = Object.create(null);        // id -> {s, r, at, sec, n, t}
+  const pending = new Map();            // id -> body not yet confirmed by the store
+  const inflight = new Set();
+  const retried = new Set();             // ids already retried once after a transient error
+  let i = 0, shown = Date.now(), db = null, ready = false, writable = true, lastSaved = null;
+
+  // protocol definitions, word for word from the exam set
+  const defs = $("defs");
+  const addDef = (k, v) => { const dt = document.createElement("dt"); dt.textContent = k; const dd = document.createElement("dd"); dd.textContent = v; defs.append(dt, dd); };
+  for (const [k, v] of Object.entries(PROTO.sentiment_labels)) addDef({ pos: "Good news", neu: "Neither", neg: "Bad news" }[k] || k, v);
+  for (const [k, v] of Object.entries(PROTO.relevance_labels)) addDef({ yes: "Yes", partly: "Partly", no: "No" }[k] || k, v);
+
+  const complete = (id) => !!(L[id] && L[id].s && L[id].r);
+  const doneCount = () => ITEMS.reduce((a, x) => a + (complete(x.id) ? 1 : 0), 0);
+  const firstOpen = () => { const j = ITEMS.findIndex((x) => !complete(x.id)); return j < 0 ? N - 1 : j; };
+  const fmt = (n) => n.toLocaleString("en-US");
+
+  function setSync(state, text) {
+    const el = $("sync"); el.dataset.state = state; el.textContent = text;
+  }
+  function syncLabel() {
+    if (!db) return;
+    if (pending.size) setSync("saving", `Saving ${pending.size}…`);
+    else setSync("saved", lastSaved ? `Saved ${lastSaved}` : "Ready");
+  }
+
+  function render() {
+    const x = ITEMS[i], l = L[x.id] || {};
+    $("meta").textContent = "";
+    const parts = [`#${i + 1} of ${fmt(N)}`, x.trading_day, x.section, x.id];
+    for (const p of parts) { const s = document.createElement("span"); s.textContent = p; $("meta").append(s); }
+    if (complete(x.id)) { const s = document.createElement("span"); s.className = "done"; s.textContent = "✓ labelled"; $("meta").append(s); }
+    $("ticker").textContent = x.ticker;
+    document.querySelectorAll(".tk").forEach((b) => (b.textContent = x.ticker));
+    $("headline").textContent = x.headline;
+    document.querySelectorAll("[data-s]").forEach((b) => { b.classList.toggle("on", b.dataset.s === l.s); b.setAttribute("aria-pressed", b.dataset.s === l.s); b.disabled = !ready || !writable; });
+    document.querySelectorAll("[data-r]").forEach((b) => { b.classList.toggle("on", b.dataset.r === l.r); b.setAttribute("aria-pressed", b.dataset.r === l.r); b.disabled = !ready || !writable; });
+    $("prev").disabled = i === 0; $("next").disabled = i === N - 1;
+    const d = doneCount();
+    $("bar").style.width = (100 * d / N) + "%";
+    $("count").innerHTML = ""; const b = document.createElement("b"); b.textContent = `${fmt(d)} / ${fmt(N)}`; $("count").append(b, " labelled");
+    const localDay = (t) => new Date(t).toLocaleDateString("en-CA");
+    const today = localDay(Date.now());
+    const todayN = ITEMS.reduce((a, it) => a + (complete(it.id) && L[it.id].at && localDay(L[it.id].at) === today ? 1 : 0), 0);
+    $("today").textContent = `${fmt(todayN)} today`;
+    const secs = ITEMS.filter((it) => complete(it.id)).map((it) => L[it.id].sec || 0).filter((s) => s > 0).sort((a, b) => a - b);
+    if (secs.length >= 10 && d < N) {
+      const med = secs[Math.floor(secs.length / 2)], left = Math.round(med * (N - d) / 60);
+      $("eta").textContent = `≈ ${left >= 60 ? Math.floor(left / 60) + " h " + (left % 60) + " min" : left + " min"} left at your pace`;
+    } else $("eta").textContent = d === N ? "All done. Tell Claude to collect the labels." : "";
+  }
+
+  async function flush(id) {
+    if (!db || inflight.has(id) || !pending.has(id)) return;
+    const body = pending.get(id);
+    inflight.add(id); syncLabel();
+    try {
+      await db.collection("labels").doc(id).set(body);
+      if (pending.get(id) === body) pending.delete(id);
+      retried.delete(id);
+      lastSaved = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      backup();
+    } catch (e) {
+      const code = e && e.code;
+      if ((code === "unavailable" || code === "resource_exhausted") && !retried.has(id)) {
+        retried.add(id);
+        setTimeout(() => flush(id), 2500 + Math.random() * 1500);
+      } else if (code === "invalid_argument" || code === "not_granted" || code === "revoked") {
+        writable = false; showNotice("This view can't save labels. Open the page from your own claude.ai account."); render();
+      } else {
+        setSync("error", "Not saved – retrying on your next click");
+      }
+    } finally {
+      inflight.delete(id);
+      if (pending.has(id) && pending.get(id) !== body) flush(id); else if (db) syncLabel();
+    }
+  }
+  const flushAll = () => { for (const id of pending.keys()) flush(id); };
+
+  function backup() {  // per-device safety copy of unsaved answers only
+    try { localStorage.setItem("pending-labels", JSON.stringify(Object.fromEntries(pending))); } catch (e) {}
+  }
+  function showNotice(text) { const n = $("notice"); n.textContent = text; n.hidden = false; }
+
+  function set(k, v) {
+    if (!ready || !writable) return;
+    retried.clear();
+    const x = ITEMS[i], prev = L[x.id] || {};
+    const now = Date.now();
+    const body = { s: prev.s || null, r: prev.r || null, t: x.ticker, at: new Date(now).toISOString(),
+                   sec: (prev.sec || 0) + Math.round((now - shown) / 1000), n: (prev.n || 0) + 1 };
+    body[k] = v;
+    shown = now;
+    L[x.id] = body; pending.set(x.id, body); backup();
+    render(); flush(x.id); flushAll();
+    if (body.s && body.r && i < N - 1 && !(prev.s && prev.r)) setTimeout(() => { if (ITEMS[i].id === x.id) go(i + 1); }, 160);
+  }
+  function go(j) { if (j < 0 || j >= N) return; i = j; shown = Date.now(); render(); }
+
+  document.querySelectorAll("[data-s]").forEach((b) => (b.onclick = () => set("s", b.dataset.s)));
+  document.querySelectorAll("[data-r]").forEach((b) => (b.onclick = () => set("r", b.dataset.r)));
+  $("prev").onclick = () => go(i - 1);
+  $("next").onclick = () => go(i + 1);
+  $("jump").onclick = () => go(firstOpen());
+  document.addEventListener("keydown", (e) => {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    const k = e.key.toLowerCase();
+    const map = { "1": ["s", "pos"], "2": ["s", "neu"], "3": ["s", "neg"], q: ["r", "yes"], w: ["r", "partly"], e: ["r", "no"] };
+    if (map[k]) { e.preventDefault(); set(...map[k]); }
+    else if (e.key === "ArrowLeft") go(i - 1);
+    else if (e.key === "ArrowRight" || (e.key === "Enter" && e.target === document.body)) go(i + 1);
+  });
+  window.addEventListener("online", flushAll);
+
+  render();
+
+  (async () => {
+    db = window.claude && window.claude.use ? await window.claude.use("db") : null;
+    if (!db) {
+      setSync("nostore", "Not connected");
+      showNotice("The label store isn't available here. Open this page on claude.ai while signed in to your account; answers can't be saved otherwise.");
+      return;
+    }
+    setSync("connecting", "Loading your labels…");
+    try {
+      const user = await window.claude.use("user");
+      if (user && typeof user.can === "function") { const w = await user.can("data.write"); if (w === false) { writable = false; showNotice("You can view this page but not save labels."); } }
+    } catch (e) {}
+    // restore answers this device clicked but the store never confirmed
+    try { const saved = JSON.parse(localStorage.getItem("pending-labels") || "{}"); for (const [id, body] of Object.entries(saved)) { if (body && body.at) pending.set(id, body); } } catch (e) {}
+    db.collection("labels").onSnapshot((snap) => {
+      for (const d of snap.docs) {
+        const v = d.data(); if (!v) continue;
+        const local = pending.get(d.id);
+        if (local && String(local.at) > String(v.at || "")) continue;   // a newer local answer is still on its way
+        if (local) pending.delete(d.id);                                  // the store already has this answer or a newer one
+        L[d.id] = Object.assign({}, v);
+      }
+      for (const [id, body] of pending) L[id] = body;
+      if (!ready) { ready = true; i = firstOpen(); shown = Date.now(); flushAll(); }
+      render(); syncLabel();
+    }, (e) => { setSync("error", "Live sync stopped – reload the page"); });
+  })();
+})();
+</script>

@@ -1,6 +1,9 @@
 """Verify a crawl store and freeze it into a versioned bundle (Phase 1.16/1.17, F8).
 
-  python scripts/freeze_pass.py --src data/raw/pass_b --name passB_v1
+  python scripts/freeze_crawl.py --src data/raw/kaohoon_articles --name kaohoon_articles_v2
+
+  The two v1 archives already on Drive keep their original names: passA_v1 = article-list
+  crawl, passB_v1 = article-page crawl.
 
 Steps:
   1. verify: every manifest row has raw/<sha256>.html.gz, it decompresses, and
@@ -61,7 +64,7 @@ def verify(src: Path) -> dict:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--src", required=True)
-    ap.add_argument("--name", required=True, help="e.g. passB_v1")
+    ap.add_argument("--name", required=True, help="e.g. kaohoon_articles_v2")
     ap.add_argument("--out", default="bundles")
     ap.add_argument("--verify-only", action="store_true")
     ap.add_argument("--force", action="store_true", help="bundle even if verification finds problems")

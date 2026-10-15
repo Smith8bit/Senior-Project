@@ -1,7 +1,9 @@
-"""Pre-registration A3b (Phase 1.9): draw the blind labelling sample and build the labelling page.
+"""Sentiment accuracy check, step 1: draw the blind labelling sample and build the labelling page.
 
-Population = the exact units the sentiment feature will use (A3a primary definition):
-  (article, ticker) pairs where the article is Thai, parsed from passB_v1, and its
+(Pre-registration item A3b; open-items register Phase 1.9.)
+
+Population = the exact units the sentiment feature will use (primary definition of the news coverage check):
+  (article, ticker) pairs where the article is Thai, parsed from the article-page crawl (archive passB_v1), and its
   news trading day (hard rule 4, 16:30 ICT cutoff) falls inside the ticker's SET50
   membership window, 2020-01-01 .. 2025-12-31.
 
@@ -14,7 +16,7 @@ scraped headlines never go into git):
 Blindness: this script never loads or runs a sentiment model. Model scores are
 produced only after labels.csv is frozen (hashed) by a separate step.
 
-  python scripts/a3b_sample.py                 # n=250, seed 20260930
+  python scripts/sentiment_check_sample.py                 # n=250, seed 20260930
 """
 from __future__ import annotations
 
@@ -30,7 +32,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from coverage_a3a import news_trading_day, trading_calendar  # noqa: E402
+from news_coverage_check import news_trading_day, trading_calendar  # noqa: E402
 
 PROTOCOL = {
     "unit": "one (headline, ticker) pair; judge the HEADLINE ONLY",
@@ -81,7 +83,7 @@ def build_population(args) -> list[dict]:
 
 
 PAGE = """<!doctype html><html lang="th"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>A3b labelling</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Sentiment check labelling</title>
 <style>
 :root{--bg:#fafaf9;--fg:#1c1917;--mut:#78716c;--card:#fff;--line:#e7e5e4;--acc:#2563eb;--pos:#15803d;--neg:#b91c1c}
 @media (prefers-color-scheme:dark){:root{--bg:#1c1917;--fg:#f5f5f4;--mut:#a8a29e;--card:#292524;--line:#44403c;--acc:#60a5fa;--pos:#4ade80;--neg:#f87171}}
@@ -96,7 +98,7 @@ button.on{outline:3px solid var(--acc)}button.pos.on{background:var(--pos);color
 .bar{height:8px;background:var(--line);border-radius:4px;overflow:hidden}.bar>i{display:block;height:100%;background:var(--acc)}
 details{color:var(--mut)}kbd{border:1px solid var(--line);border-radius:4px;padding:0 4px;font-size:13px}
 </style></head><body><main>
-<h1 style="font-size:20px;margin:4px 0">A3b blind labelling <span class="meta" id="count"></span></h1>
+<h1 style="font-size:20px;margin:4px 0">Sentiment check: blind labelling <span class="meta" id="count"></span></h1>
 <div class="bar"><i id="bar" style="width:0"></i></div>
 <details><summary>Protocol (read once before starting)</summary><div id="proto"></div></details>
 <div class="card">
@@ -110,7 +112,7 @@ details{color:var(--mut)}kbd{border:1px solid var(--line);border-radius:4px;padd
 <div class="row"><button id="export">Download labels.csv</button><span class="meta" id="saved"></span></div>
 <p class="meta">Labels are kept in this browser tab and in this browser's local storage for this file. Download labels.csv when done and save it next to this page.</p>
 </main><script>
-const ITEMS=__ITEMS__, PROTO=__PROTO__, KEY="a3b_labels___SAMPLEHASH__";
+const ITEMS=__ITEMS__, PROTO=__PROTO__, KEY="sentiment_check_labels___SAMPLEHASH__";
 let L={}; try{L=JSON.parse(localStorage.getItem(KEY)||"{}")}catch(e){}
 let i=0, shown=Date.now();
 const $=id=>document.getElementById(id);
@@ -146,10 +148,10 @@ show();
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--articles", default="data/raw/pass_b/articles.jsonl")
+    ap.add_argument("--articles", default="data/raw/kaohoon_articles/articles.jsonl")
     ap.add_argument("--membership", default="data/set50_membership.csv")
     ap.add_argument("--prices", default="data/raw/prices/siamchart/set50_union_2019_2025.csv")
-    ap.add_argument("--out", default="data/raw/a3b_labeling")
+    ap.add_argument("--out", default="data/raw/sentiment_check")
     ap.add_argument("--n", type=int, default=250)
     ap.add_argument("--seed", type=int, default=20260930)
     args = ap.parse_args()
@@ -162,7 +164,7 @@ def main() -> int:
     rng = random.Random(args.seed)
     sample = rng.sample(pop, args.n)
     for k, s in enumerate(sample, 1):
-        s["id"] = f"a3b-{k:03d}"
+        s["id"] = f"a3b-{k:03d}"  # old prefix kept on purpose: it is inside the frozen sample.csv
     out.mkdir(parents=True, exist_ok=True)
     fields = ["id", "ticker", "url", "section", "published", "trading_day", "headline"]
     with (out / "sample.csv").open("w", newline="", encoding="utf-8-sig") as f:

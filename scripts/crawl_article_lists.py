@@ -1,4 +1,4 @@
-"""Pass A: crawl Kaohoon tag listing pages, newest to oldest, per symbol.
+"""Article-list crawl: crawl Kaohoon tag listing pages, newest to oldest, per symbol.
 
 Stop rule (agreed 2026-09-15): walk /tag/{symbol}/page/{N} for N = 1, 2, ...
 and stop after the first page whose LAST item is dated before the floor
@@ -9,7 +9,7 @@ Date of an item, in order of preference:
   1. listing <time datetime="...">
   2. Thai date text in the listing card, e.g. "14 ก.ย. 2569" (Buddhist year -543)
   3. fallback: open the article and read JSON-LD datePublished
-     (only done for the last item on a page, and the page is saved so Pass B
+     (only done for the last item on a page, and the page is saved so the article-page crawl
      never re-fetches it)
 
 Safeguards:
@@ -21,14 +21,14 @@ Safeguards:
   - one tab, fixed delay >= 3 s, stops the whole run on any block (Phase 1.19)
 
 Usage:
-  python scripts/pass_a.py --symbols BANPU
-  python scripts/pass_a.py --symbols-file symbols.txt      # one ticker per line
+  python scripts/crawl_article_lists.py --symbols BANPU
+  python scripts/crawl_article_lists.py --symbols-file symbols.txt      # one ticker per line
 
   The browser is resolved the same way as the spike: Playwright's bundled
   Chromium when this environment has it downloaded, otherwise an installed
   Edge / Chrome / Brave. Force one with --browser msedge (or --browser-exe
   <path>). The browser used is recorded on every symbols.jsonl row.
-Outputs (in --out, default data/raw/pass_a):
+Outputs (in --out, default data/raw/kaohoon_article_lists):
   listings.jsonl   one row per (symbol, article)
   symbols.jsonl    one summary row per finished symbol
 """
@@ -45,7 +45,7 @@ from urllib.parse import urlparse
 
 from playwright.sync_api import sync_playwright
 
-# Shared helpers live in the spike for now; move to a common module before Pass B.
+# Shared helpers live in the spike for now; move to a common module before the article-page crawl.
 from spike_kaohoon import (ARTICLE_RE, BASE, LISTING_JS, BROWSER_ORDER, Store,
                            ensure_terminated, fetch, is_article, parse_jsonld,
                            pick_browser, replay, utc_now)
@@ -206,7 +206,7 @@ def main() -> int:
     ap.add_argument("--browser", default="auto", choices=("auto", *BROWSER_ORDER),
                     help="which browser to drive (default: first one installed)")
     ap.add_argument("--browser-exe", help="full path to a Chromium-based browser, overrides --browser")
-    ap.add_argument("--out", default="data/raw/pass_a")
+    ap.add_argument("--out", default="data/raw/kaohoon_article_lists")
     ap.add_argument("--base", default=BASE, help=argparse.SUPPRESS)  # for offline tests
     args = ap.parse_args()
     if args.delay < 3:

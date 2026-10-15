@@ -1,4 +1,5 @@
-"""Pass B: fetch Kaohoon article pages (and the sitemap fallback) for the Pass A corpus.
+"""Article-page crawl: fetch Kaohoon article pages (and the sitemap fallback) for every article
+found by the article-list crawl.
 
 Three subcommands, all resumable and all obeying hard rule 6 (a stored page is
 never fetched again; parsing always runs from the stored copy):
@@ -8,7 +9,7 @@ never fetched again; parsing always runs from the stored copy):
              ~257 page loads. This is fallback L2 of the Phase 1.5 plan:
              lastmod >= publish time always, so using it for the 16:30 cutoff
              can push an article later but never earlier (leak-safe).
-  articles   Fetch each unique article URL from Pass A listings in the study
+  articles   Fetch each unique article URL from the article-list crawl in the study
              window, priority tickers first. Writes articles.jsonl: one parsed
              row per URL (datePublished/dateModified verbatim, headline,
              keywords, articleSection, body length, language guess).
@@ -29,11 +30,11 @@ Stop rules are pre-committed in claude/phase-1.5-scraping-contingency.md:
   exit 0  finished, or stopped at --limit / --max-hours
 
 Usage (Windows, repo root):
-  python scripts/pass_b.py sitemaps
-  python scripts/pass_b.py articles --limit 50            # timing trial
-  python scripts/pass_b.py articles --only-priority       # M1 subset only
-  python scripts/pass_b.py articles --max-hours 10        # overnight chunk
-  python scripts/pass_b.py reparse
+  python scripts/crawl_articles.py sitemaps
+  python scripts/crawl_articles.py articles --limit 50            # timing trial
+  python scripts/crawl_articles.py articles --only-priority       # M1 subset only
+  python scripts/crawl_articles.py articles --max-hours 10        # overnight chunk
+  python scripts/crawl_articles.py reparse
 """
 from __future__ import annotations
 
@@ -194,7 +195,7 @@ def fetch_raw(page, store: Store, url: str, delay: float) -> dict:
         # is not a block: the page parsed as a complete Article.
         blocked = None
     store.save(url, text, {"status": status, "final_url": page.url, "title": title, "seconds": seconds,
-                           "scraped_at": utc_now(), "blocked": blocked, "kind": "pass_b"})
+                           "scraped_at": utc_now(), "blocked": blocked, "kind": "pass_b"})  # value kept: matches the archived records
     return {"text": text, "status": status, "final_url": page.url, "blocked": blocked, "cached": False,
             "seconds": seconds, "error": None}
 
@@ -456,8 +457,8 @@ def cmd_reparse(args, out: Path) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("command", choices=("sitemaps", "articles", "reparse"))
-    ap.add_argument("--listings", default="data/raw/pass_a/listings.jsonl")
-    ap.add_argument("--out", default="data/raw/pass_b")
+    ap.add_argument("--listings", default="data/raw/kaohoon_article_lists/listings.jsonl")
+    ap.add_argument("--out", default="data/raw/kaohoon_articles")
     ap.add_argument("--from", dest="date_from", default="2019-12-25",
                     help="listing-date window start (buffer before 2020-01-01)")
     ap.add_argument("--to", dest="date_to", default="2026-01-05",

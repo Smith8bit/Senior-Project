@@ -1,0 +1,108 @@
+{
+  "declared_in": "claude/pre-registration-amendment-2026-10-06-sentiment-recalibration.md",
+  "status": "exploratory, decided after the primary result",
+  "score": "p_pos - p_neg",
+  "t_neg": -0.005048,
+  "t_pos": 0.005976,
+  "kappa_half_A_fit": 0.5108,
+  "half_B": {
+    "n": 125,
+    "kappa": 0.4037,
+    "macro_f1": 0.5966,
+    "accuracy": 0.64,
+    "kappa_ci95_bootstrap": [
+      0.2776,
+      0.5319
+    ],
+    "per_class": {
+      "pos": {
+        "precision": 0.6667,
+        "recall": 0.8667,
+        "f1": 0.7536,
+        "support": 60
+      },
+      "neu": {
+        "precision": 0.6957,
+        "recall": 0.3333,
+        "f1": 0.4507,
+        "support": 48
+      },
+      "neg": {
+        "precision": 0.5,
+        "recall": 0.7059,
+        "f1": 0.5854,
+        "support": 17
+      }
+    },
+    "confusion_rows_human_cols_model": {
+      "pos": {
+        "pos": 52,
+        "neu": 5,
+        "neg": 3
+      },
+      "neu": {
+        "pos": 23,
+        "neu": 16,
+        "neg": 9
+      },
+      "neg": {
+        "pos": 3,
+        "neu": 2,
+        "neg": 12
+      }
+    }
+  },
+  "half_B_relevance_yes": {
+    "n": 34,
+    "kappa": 0.4897,
+    "macro_f1": 0.6953,
+    "accuracy": 0.7647,
+    "kappa_ci95_bootstrap": [
+      0.1408,
+      0.7606
+    ],
+    "per_class": {
+      "pos": {
+        "precision": 0.8,
+        "recall": 0.8696,
+        "f1": 0.8333,
+        "support": 23
+      },
+      "neu": {
+        "precision": 0.5,
+        "recall": 0.2857,
+        "f1": 0.3636,
+        "support": 7
+      },
+      "neg": {
+        "precision": 0.8,
+        "recall": 1.0,
+        "f1": 0.8889,
+        "support": 4
+      }
+    },
+    "confusion_rows_human_cols_model": {
+      "pos": {
+        "pos": 20,
+        "neu": 2,
+        "neg": 1
+      },
+      "neu": {
+        "pos": 5,
+        "neu": 2,
+        "neg": 0
+      },
+      "neg": {
+        "pos": 0,
+        "neu": 0,
+        "neg": 4
+      }
+    }
+  },
+  "band_half_B": "fine-tune or demote to exploratory",
+  "inputs": {
+    "labels_sha256": "0c693969cbaebc3936383556a1f7df809bd88c086d7a5980f469a4d6a1ea4d22",
+    "preds_sha256": "476f33ba5ae0a80fc559c863115f12eab73d702f521d7d1f01df357994dd9ad0"
+  },
+  "computed_at": "2026-10-06T07:42:12+00:00"
+}

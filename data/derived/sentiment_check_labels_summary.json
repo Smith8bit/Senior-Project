@@ -1,0 +1,96 @@
+{
+  "computed_at": "2026-10-06T07:24:14+00:00",
+  "labels_sha256": "0c693969cbaebc3936383556a1f7df809bd88c086d7a5980f469a4d6a1ea4d22",
+  "n": 250,
+  "sentiment_share": {
+    "pos": 0.508,
+    "neu": 0.324,
+    "neg": 0.168
+  },
+  "relevance_share": {
+    "yes": 0.32,
+    "partly": 0.172,
+    "no": 0.508
+  },
+  "relevance_yes_share": 0.32,
+  "relevance_yes_prediction": [
+    0.4,
+    0.6
+  ],
+  "relevance_yes_within_prediction": false,
+  "crosstab_relevance_by_sentiment": {
+    "yes": {
+      "pos": 55,
+      "neu": 15,
+      "neg": 10
+    },
+    "partly": {
+      "pos": 23,
+      "neu": 11,
+      "neg": 9
+    },
+    "no": {
+      "pos": 49,
+      "neu": 55,
+      "neg": 23
+    }
+  },
+  "by_section": {
+    "news": {
+      "n": 110,
+      "relevance_yes": 35,
+      "pos": 69,
+      "neu": 23,
+      "neg": 18
+    },
+    "breakingnews": {
+      "n": 44,
+      "relevance_yes": 24,
+      "pos": 33,
+      "neu": 6,
+      "neg": 5
+    },
+    "column": {
+      "n": 41,
+      "relevance_yes": 2,
+      "pos": 1,
+      "neu": 39,
+      "neg": 1
+    },
+    "summary": {
+      "n": 27,
+      "relevance_yes": 1,
+      "pos": 8,
+      "neu": 1,
+      "neg": 18
+    },
+    "pr": {
+      "n": 19,
+      "relevance_yes": 13,
+      "pos": 7,
+      "neu": 12,
+      "neg": 0
+    },
+    "stockanalysis": {
+      "n": 4,
+      "relevance_yes": 3,
+      "pos": 4,
+      "neu": 0,
+      "neg": 0
+    },
+    "news/company": {
+      "n": 4,
+      "relevance_yes": 2,
+      "pos": 4,
+      "neu": 0,
+      "neg": 0
+    },
+    "infographic": {
+      "n": 1,
+      "relevance_yes": 0,
+      "pos": 1,
+      "neu": 0,
+      "neg": 0
+    }
+  }
+}
