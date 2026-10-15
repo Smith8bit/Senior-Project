@@ -71,6 +71,12 @@ def git_commit() -> str:
         return "unknown"
 
 
+def confusion(y_true, y_pred):
+    """3x3 counts, rows = actual (down, flat, up), columns = predicted (down, flat, up)."""
+    from sklearn.metrics import confusion_matrix
+    return confusion_matrix(y_true, y_pred, labels=[0, 1, 2]).tolist()
+
+
 def main():
     from xgboost import XGBClassifier, XGBRegressor
     data, info = build_dataset()
@@ -90,14 +96,15 @@ def main():
         floors = {"majority_class": M.trend_metrics(yva, np.full_like(yva, maj)) | {"class": L.CLASSES[maj]},
                   "stratified_random_expected": {"macro_f1": round(float(np.mean(2 * pv * q / (pv + q))), 4),
                                                  "accuracy": round(float((pv * q).sum()), 4)},
-                  "trend_continues": M.trend_metrics(yva, past),
-                  "trend_reverses": M.trend_metrics(yva, 2 - past),
+                  "trend_continues": M.trend_metrics(yva, past) | {"confusion": confusion(yva, past)},
+                  "trend_reverses": M.trend_metrics(yva, 2 - past) | {"confusion": confusion(yva, 2 - past)},
                   "persistence_zero_return": M.return_metrics(rva, np.zeros_like(rva)),
                   "train_mean_return": M.return_metrics(rva, np.full_like(rva, rtr.mean()))}
         cls_runs, reg_runs = [], []
         for seed in SEEDS:
             clf = XGBClassifier(objective="multi:softprob", num_class=3, random_state=seed, **XGB).fit(Xtr, ytr)
-            cls_runs.append({"seed": seed, **M.trend_metrics(yva, clf.predict(Xva))})
+            yhat = clf.predict(Xva)
+            cls_runs.append({"seed": seed, **M.trend_metrics(yva, yhat), "confusion": confusion(yva, yhat)})
             reg = XGBRegressor(objective="reg:squarederror", random_state=seed, **XGB).fit(Xtr, rtr)
             pr = reg.predict(Xva)
             reg_runs.append({"seed": seed, **M.return_metrics(rva, pr), "corr_with_outcome": round(float(np.corrcoef(pr, rva)[0, 1]), 4)})
