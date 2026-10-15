@@ -11,10 +11,14 @@ Fixed settings, no tuning. Early stopping uses an inner hold-out = the last 10% 
 
   python scripts/baselines_deep.py [--models lstm patchtst] [--seeds ...] [--max-epochs 15]
   python scripts/baselines_deep.py --models multiscale_sector --out data/derived/main_model_v0.json   # main model, no sentiment yet
+
+Each run also stores a 3x3 confusion grid per horizon (rows = actual down/flat/up, columns = predicted) and writes
+every validation prediction (class probabilities and return forecasts, per seed) to <out>_preds.csv.gz.
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import statistics
 import sys
@@ -25,6 +29,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
+from sklearn.metrics import confusion_matrix
 from torch import nn
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -95,6 +100,11 @@ def predict(model, X, G=None, bs=2048):
     return np.concatenate(outs_p), np.concatenate(outs_r)
 
 
+def confusion(y_true, y_pred):
+    """3x3 counts, rows = actual (down, flat, up), columns = predicted (down, flat, up)."""
+    return confusion_matrix(y_true, y_pred, labels=[0, 1, 2]).tolist()
+
+
 def macro_f1_mean(Y, P):
     return float(np.mean([M.trend_metrics(Y[:, j], P[:, j].argmax(-1))["macro_f1"] for j in range(Y.shape[1])]))
 
@@ -140,6 +150,7 @@ def main(argv=None):
     ap.add_argument("--threads", type=int, default=0)
     ap.add_argument("--out", default="data/derived/baselines_deep.json")
     ap.add_argument("--news", default=None, help="add daily sentiment channels from this scores file (e.g. data/derived/sentiment_scores.csv)")
+    ap.add_argument("--preds", default=None, help="validation predictions file (default: <out>_preds.csv.gz)")
     args = ap.parse_args(argv)
     SET["max_epochs"] = args.max_epochs
     if args.threads:
@@ -179,10 +190,12 @@ def main(argv=None):
         q, pv = np.bincount(ytr, minlength=3) / len(ytr), np.bincount(yva, minlength=3) / len(yva)
         floors[f"h{h}"] = {"majority_class": M.trend_metrics(yva, np.full_like(yva, M.majority_class(ytr))),
                            "stratified_random_expected": {"macro_f1": round(float(np.mean(2 * pv * q / (pv + q))), 4)},
-                           "trend_continues": M.trend_metrics(yva, past), "trend_reverses": M.trend_metrics(yva, 2 - past),
+                           "trend_continues": M.trend_metrics(yva, past) | {"confusion": confusion(yva, past)},
+                           "trend_reverses": M.trend_metrics(yva, 2 - past) | {"confusion": confusion(yva, 2 - past)},
                            "persistence_zero_return": M.return_metrics(Rva[:, j], np.zeros(len(Rva)))}
 
     res = {"computed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "git_commit": BT.git_commit(),
+           "script_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
            "torch": torch.__version__, "threads": torch.get_num_threads(), "device": str(DEVICE),
            "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None, "evaluated_on": "validation only (test sealed)",
            "settings": SET | {"lookback": LOOKBACK, "channels": channels, "news_file": args.news},
@@ -191,6 +204,12 @@ def main(argv=None):
            "data": info, "floors": floors, "models": {}}
     out_path = ROOT / args.out
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    pred_path = ROOT / args.preds if args.preds else out_path.with_name(out_path.stem + "_preds.csv.gz")
+    preds = va[["symbol", "date"]].reset_index(drop=True).copy()      # one row per validation stock-day
+    for j, h in enumerate(L.HORIZONS):
+        preds[f"y_{h}"] = Y["val"][:, j]; preds[f"fwd_{h}"] = Rva[:, j]
+    res["confusion_layout"] = "rows = actual (down, flat, up); columns = predicted (down, flat, up); validation block"
+    res["preds_file"] = pred_path.name
     for name in args.models:
         runs = []
         for seed in args.seeds:
@@ -200,13 +219,20 @@ def main(argv=None):
             per_h = {}
             for j, h in enumerate(L.HORIZONS):
                 rp = R[:, j] * r_sd[j]
-                per_h[f"h{h}"] = {**M.trend_metrics(Y["val"][:, j], P[:, j].argmax(-1)),
-                                  **M.return_metrics(Rva[:, j], rp), "corr_with_outcome": round(float(np.corrcoef(rp, Rva[:, j])[0, 1]), 4)}
+                yhat = P[:, j].argmax(-1)
+                per_h[f"h{h}"] = {**M.trend_metrics(Y["val"][:, j], yhat),
+                                  **M.return_metrics(Rva[:, j], rp), "corr_with_outcome": round(float(np.corrcoef(rp, Rva[:, j])[0, 1]), 4),
+                                  "confusion": confusion(Y["val"][:, j], yhat)}
+                preds[f"{name}_s{seed}_class{h}"] = yhat                      # exact predicted class (0 down, 1 flat, 2 up)
+                for c, cls in enumerate(L.CLASSES):
+                    preds[f"{name}_s{seed}_p{h}_{cls}"] = P[:, j, c].round(6)
+                preds[f"{name}_s{seed}_r{h}"] = rp.round(6)
             runs.append({"seed": seed, "seconds": round(time.time() - t0, 1),
                          "params": sum(p.numel() for p in model.parameters()), **meta, "val": per_h})
             print(f"  {name} seed {seed}: " + "  ".join(f"h{h} F1 {per_h[f'h{h}']['macro_f1']:.3f}" for h in L.HORIZONS), flush=True)
             res["models"][name] = {"runs": runs}
             out_path.write_text(json.dumps(res, indent=2, default=str), encoding="utf-8")   # save after every run
+            preds.to_csv(pred_path, index=False)
         summ = {}
         for h in L.HORIZONS:
             summ[f"h{h}"] = {k: {"mean": round(statistics.mean(r["val"][f"h{h}"][k] for r in runs), 5),
@@ -214,7 +240,7 @@ def main(argv=None):
                              for k in ("macro_f1", "accuracy", "r2_os_vs_zero", "corr_with_outcome")}
         res["models"][name]["summary"] = M.report(summ, floors)
         out_path.write_text(json.dumps(res, indent=2, default=str), encoding="utf-8")
-    print(f"wrote {out_path}")
+    print(f"wrote {out_path} and {pred_path}")
 
 
 if __name__ == "__main__":
