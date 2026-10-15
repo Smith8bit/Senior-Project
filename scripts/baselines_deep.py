@@ -44,7 +44,7 @@ from multiscale_patchtst import MultiScalePatchTST, UncertaintyWeightedLoss  # n
 
 LOOKBACK = 60
 SEEDS = (20261015, 20261016, 20261017)
-SET = dict(lr=1e-3, weight_decay=0.01, batch_size=256, max_epochs=15, patience=5, inner_es_share=0.10, purge=10)
+SET = dict(lr=1e-4, weight_decay=0.01, batch_size=256, max_epochs=15, patience=10, inner_es_share=0.10, purge=10)
 
 
 class LSTMBaseline(nn.Module):
