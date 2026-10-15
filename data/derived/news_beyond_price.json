@@ -1,0 +1,68 @@
+{
+  "computed_at": "2026-10-15T10:40:00+00:00",
+  "git_commit": "unknown",
+  "scores_file": "data/derived/sentiment_scores.csv",
+  "evaluated_on": "validation only (test sealed)",
+  "news_coverage_val": {
+    "B_share_rows_with_news": 0.3833,
+    "C_share_rows_with_news": 0.3367
+  },
+  "horizons": {
+    "h1": {
+      "macro_f1": {
+        "A": 0.3563,
+        "B": 0.3559,
+        "C": 0.3556
+      },
+      "delta_B_minus_A": -0.0004,
+      "ci95_B_minus_A": [
+        -0.007,
+        0.0063
+      ],
+      "delta_C_minus_A": -0.0007,
+      "ci95_C_minus_A": [
+        -0.0083,
+        0.0066
+      ]
+    },
+    "h5": {
+      "macro_f1": {
+        "A": 0.3805,
+        "B": 0.3694,
+        "C": 0.3691
+      },
+      "delta_B_minus_A": -0.0111,
+      "ci95_B_minus_A": [
+        -0.0175,
+        -0.0044
+      ],
+      "delta_C_minus_A": -0.0114,
+      "ci95_C_minus_A": [
+        -0.0188,
+        -0.004
+      ]
+    },
+    "h10": {
+      "macro_f1": {
+        "A": 0.3575,
+        "B": 0.3576,
+        "C": 0.3569
+      },
+      "delta_B_minus_A": 0.0001,
+      "ci95_B_minus_A": [
+        -0.0084,
+        0.008
+      ],
+      "delta_C_minus_A": -0.0006,
+      "ci95_C_minus_A": [
+        -0.0094,
+        0.0079
+      ]
+    }
+  },
+  "decision": {
+    "B_horizons_ci_above_0": 0,
+    "C_horizons_ci_above_0": 0,
+    "verdict": "no measurable gain beyond price (negative-result framing)"
+  }
+}

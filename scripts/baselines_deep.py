@@ -74,6 +74,13 @@ def make_model(name, n_channels, n_groups=0):
     raise ValueError(name)
 
 
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")   # Colab GPU when present, else CPU
+
+
+def _t(a):
+    return torch.from_numpy(np.ascontiguousarray(a)).to(DEVICE)
+
+
 def _call(model, xb, gb):
     return model(xb, gb) if getattr(model, "group_emb", None) is not None else model(xb)
 
@@ -83,8 +90,8 @@ def predict(model, X, G=None, bs=2048):
     outs_p, outs_r = [], []
     with torch.no_grad():
         for i in range(0, len(X), bs):
-            o = _call(model, torch.from_numpy(X[i:i + bs]), None if G is None else torch.from_numpy(G[i:i + bs]))
-            outs_p.append(torch.softmax(o["trend_logits"], -1).numpy()); outs_r.append(o["returns"].numpy())
+            o = _call(model, _t(X[i:i + bs]), None if G is None else _t(G[i:i + bs]))
+            outs_p.append(torch.softmax(o["trend_logits"], -1).cpu().numpy()); outs_r.append(o["returns"].cpu().numpy())
     return np.concatenate(outs_p), np.concatenate(outs_r)
 
 
@@ -94,8 +101,10 @@ def macro_f1_mean(Y, P):
 
 def train_one(name, seed, Xfit, Yfit, Rfit, Xes, Yes, Gfit=None, Ges=None, n_groups=0):
     torch.manual_seed(seed); np.random.seed(seed)
-    model = make_model(name, Xfit.shape[-1], n_groups)
-    loss_fn = UncertaintyWeightedLoss()
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    model = make_model(name, Xfit.shape[-1], n_groups).to(DEVICE)
+    loss_fn = UncertaintyWeightedLoss().to(DEVICE)
     opt = torch.optim.AdamW(list(model.parameters()) + list(loss_fn.parameters()), lr=SET["lr"], weight_decay=SET["weight_decay"])
     rng = np.random.default_rng(seed)
     best, best_state, best_ep, bad, hist = -1.0, None, 0, 0, []
@@ -104,8 +113,8 @@ def train_one(name, seed, Xfit, Yfit, Rfit, Xes, Yes, Gfit=None, Ges=None, n_gro
         order = rng.permutation(len(Xfit)); tot = 0.0
         for i in range(0, len(order), SET["batch_size"]):
             b = order[i:i + SET["batch_size"]]
-            out = _call(model, torch.from_numpy(Xfit[b]), None if Gfit is None else torch.from_numpy(Gfit[b]))
-            loss, _ = loss_fn(out, torch.from_numpy(Yfit[b]), torch.from_numpy(Rfit[b]))
+            out = _call(model, _t(Xfit[b]), None if Gfit is None else _t(Gfit[b]))
+            loss, _ = loss_fn(out, _t(Yfit[b]), _t(Rfit[b]))
             opt.zero_grad(); loss.backward(); nn.utils.clip_grad_norm_(model.parameters(), 1.0); opt.step()
             tot += loss.item() * len(b)
         es = macro_f1_mean(Yes, predict(model, Xes, Ges)[0])
@@ -130,19 +139,28 @@ def main(argv=None):
     ap.add_argument("--max-epochs", type=int, default=SET["max_epochs"])
     ap.add_argument("--threads", type=int, default=0)
     ap.add_argument("--out", default="data/derived/baselines_deep.json")
+    ap.add_argument("--news", default=None, help="add daily sentiment channels from this scores file (e.g. data/derived/sentiment_scores.csv)")
     args = ap.parse_args(argv)
     SET["max_epochs"] = args.max_epochs
     if args.threads:
         torch.set_num_threads(args.threads)
 
     data, info, full = BT.build_dataset(return_full=True)
+    channels = list(F.FEATURES)
+    if args.news:                                   # daily sentiment channels, known at the close of each day
+        import news_beyond_price as NB
+        nf = NB.news_features(pd.read_csv(ROOT / args.news), full[["symbol", "date"]])
+        key = pd.MultiIndex.from_frame(full[["symbol", "date"]])
+        for c in ("sent_mean", "sent_n", "has_news"):
+            full[c] = nf[c].reindex(key).to_numpy()
+        channels += ["sent_mean", "sent_n", "has_news"]
     tr, va = data[data.split == "train"], data[data.split == "val"]
     # inner early-stopping block: last 10% of training dates, purged
     tdates = np.sort(tr.date.unique()); cut = int(len(tdates) * (1 - SET["inner_es_share"]))
     fit_end, es_start = tdates[cut - 1 - SET["purge"]], tdates[cut]
     fit, es = tr[tr.date <= fit_end], tr[tr.date >= es_start]
 
-    z = SQ.standardise_full(full, F.FEATURES, tr.index)          # scaler sees training rows only
+    z = SQ.standardise_full(full, channels, tr.index)            # scaler sees training rows only
     X = {k: SQ.windows(full, z, d.index, LOOKBACK) for k, d in (("fit", fit), ("es", es), ("val", va))}
     Y = {k: d[[f"y_{h}" for h in L.HORIZONS]].to_numpy(np.int64) for k, d in (("fit", fit), ("es", es), ("val", va))}
     r_sd = tr[[f"fwd_{h}" for h in L.HORIZONS]].std().to_numpy()   # return target scale from train only
@@ -152,7 +170,7 @@ def main(argv=None):
     sec_id = {s: i + 1 for i, s in enumerate(sorted(sectors.sector.unique()))}       # 0 = unknown
     sym2g = dict(zip(sectors.symbol, sectors.sector.map(sec_id)))
     G = {k: d.symbol.map(sym2g).fillna(0).to_numpy(np.int64) for k, d in (("fit", fit), ("es", es), ("val", va))}
-    print(f"rows: fit {len(fit)} / inner-ES {len(es)} / val {len(va)}; window {LOOKBACK} x {len(F.FEATURES)}", flush=True)
+    print(f"rows: fit {len(fit)} / inner-ES {len(es)} / val {len(va)}; window {LOOKBACK} x {len(channels)}", flush=True)
 
     floors = {}
     for j, h in enumerate(L.HORIZONS):
@@ -165,8 +183,9 @@ def main(argv=None):
                            "persistence_zero_return": M.return_metrics(Rva[:, j], np.zeros(len(Rva)))}
 
     res = {"computed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "git_commit": BT.git_commit(),
-           "torch": torch.__version__, "threads": torch.get_num_threads(), "evaluated_on": "validation only (test sealed)",
-           "settings": SET | {"lookback": LOOKBACK, "channels": F.FEATURES},
+           "torch": torch.__version__, "threads": torch.get_num_threads(), "device": str(DEVICE),
+           "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None, "evaluated_on": "validation only (test sealed)",
+           "settings": SET | {"lookback": LOOKBACK, "channels": channels, "news_file": args.news},
            "inner_es": {"fit_end": str(pd.Timestamp(fit_end).date()), "es_start": str(pd.Timestamp(es_start).date()),
                         "rows_fit": len(fit), "rows_es": len(es)},
            "data": info, "floors": floors, "models": {}}
