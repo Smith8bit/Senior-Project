@@ -163,13 +163,15 @@ def main(argv=None):
     ap.add_argument("--news", default=None, help="add daily sentiment channels from this scores file (e.g. data/derived/sentiment_scores.csv)")
     ap.add_argument("--preds", default=None, help="validation predictions file (default: <out>_preds.csv.gz)")
     ap.add_argument("--extra-features", default="none", choices=sorted(BT.EXTRA), help="e03: add src/features_xs.py inputs")
+    ap.add_argument("--eval-start", default=None, help="E05 walk-forward fold: first evaluation date (with --eval-end)")
+    ap.add_argument("--eval-end", default=None, help="E05 walk-forward fold: last evaluation date")
     args = ap.parse_args(argv)
     SET.update(max_epochs=args.max_epochs, lr=args.lr, dropout=args.dropout, patience=args.patience)
     print("settings: " + ", ".join(f"{k}={SET[k]}" for k in ("lr", "dropout", "max_epochs", "patience")), flush=True)
     if args.threads:
         torch.set_num_threads(args.threads)
 
-    data, info, full = BT.build_dataset(return_full=True, extra=args.extra_features)
+    data, info, full = BT.build_dataset(return_full=True, extra=args.extra_features, fold=BT.fold_arg(args))
     channels = list(F.FEATURES) + BT.EXTRA[args.extra_features]
     if args.news:                                   # daily sentiment channels, known at the close of each day
         import news_beyond_price as NB

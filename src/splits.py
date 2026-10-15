@@ -20,6 +20,27 @@ def date_blocks(dates: pd.Series, purge: int = 10) -> dict:
             "n_dates": n, "purge": purge}
 
 
+def walk_forward_blocks(dates: pd.Series, eval_start, eval_end, purge: int = 10) -> dict:
+    """E05 walk-forward fold: train on every date before the evaluation window (minus a purge of `purge` trading
+    days), evaluate on [eval_start, eval_end]. The evaluation window is returned under "val" so all scripts treat it
+    as the scored block. It must end on or before the official validation end, so no label reaches into the sealed
+    test block, which keeps its official dates and is never trained on or scored."""
+    u = np.sort(pd.unique(dates))
+    official = date_blocks(dates, purge)
+    e = u[(u >= np.datetime64(pd.Timestamp(eval_start))) & (u <= np.datetime64(pd.Timestamp(eval_end)))]
+    if len(e) == 0:
+        raise ValueError(f"no trading dates in the evaluation window {eval_start} .. {eval_end}")
+    if e[-1] > official["val"][1]:
+        raise ValueError(f"evaluation window ends {pd.Timestamp(e[-1]).date()}, after the official validation end "
+                         f"{pd.Timestamp(official['val'][1]).date()}: its labels would reach into the sealed test block")
+    i0 = int(np.searchsorted(u, e[0]))
+    if i0 - 1 - purge < 0:
+        raise ValueError("evaluation window starts too early: no training dates left after the purge")
+    return {"train": (u[0], u[i0 - 1 - purge]), "val": (e[0], e[-1]), "test": official["test"],
+            "n_dates": len(u), "purge": purge, "fold": {"eval_start": str(pd.Timestamp(e[0]).date()),
+                                                         "eval_end": str(pd.Timestamp(e[-1]).date())}}
+
+
 def assign(df: pd.DataFrame, blocks: dict) -> pd.Series:
     s = pd.Series("purged", index=df.index)
     for name in ("train", "val", "test"):

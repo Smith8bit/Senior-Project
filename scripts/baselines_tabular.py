@@ -42,11 +42,14 @@ XGB = dict(n_estimators=300, max_depth=4, learning_rate=0.05, subsample=0.8, col
 EXTRA = {"none": [], "e03": XS.E03_FEATURES}
 
 
-def build_dataset(root: Path = ROOT, return_full: bool = False, extra: str = "none"):
+def build_dataset(root: Path = ROOT, return_full: bool = False, extra: str = "none", fold: dict | None = None):
     """Sample rows (member stock-days with features and labels) + info; with return_full, also the full
     daily frame (all trading days, incl. non-member days) that sequence models cut their windows from.
     extra="e03" adds the E03 inputs (src/features_xs.py). They are NOT part of the row filter, so the sample
-    rows are identical with and without them."""
+    rows are identical with and without them.
+    fold={"eval_start": ..., "eval_end": ...} (E05) replaces the official split by a walk-forward fold: train on
+    everything before eval_start (minus the purge), score eval_start..eval_end. Labels (k, sigma) are refitted on the
+    fold's training rows. Default None = the official 70/15/15 split, unchanged."""
     df = P.load_prices(root)
     df = F.add_features(df)
     if extra != "none":
@@ -56,7 +59,7 @@ def build_dataset(root: Path = ROOT, return_full: bool = False, extra: str = "no
     keep = df.member & (df.date >= P.STUDY_START) & (df.date <= P.STUDY_END)
     keep &= df[F.FEATURES + fwd].notna().all(axis=1)
     data = df[keep].copy()
-    blocks = SP.date_blocks(data.date)
+    blocks = SP.date_blocks(data.date) if fold is None else SP.walk_forward_blocks(data.date, **fold)
     data["split"] = SP.assign(data, blocks)
     info = {"rows_total": int(len(data)), "blocks": {k: [str(pd.Timestamp(v[0]).date()), str(pd.Timestamp(v[1]).date())]
                                                      if isinstance(v, tuple) else v for k, v in blocks.items()},
@@ -75,6 +78,12 @@ def build_dataset(root: Path = ROOT, return_full: bool = False, extra: str = "no
                          "val_class_shares": {c: round(float((data.loc[data.split == "val", f"y_{h}"] == i).mean()), 4)
                                               for i, c in enumerate(L.CLASSES)}}
     return (data, info, df) if return_full else (data, info)
+
+
+def fold_arg(args):
+    if (args.eval_start is None) != (args.eval_end is None):
+        raise SystemExit("give both --eval-start and --eval-end, or neither")
+    return None if args.eval_start is None else {"eval_start": args.eval_start, "eval_end": args.eval_end}
 
 
 def git_commit() -> str:
@@ -98,10 +107,12 @@ def main(argv=None):
     ap.add_argument("--out", default="data/derived/baselines_tabular.json")
     ap.add_argument("--preds", default=None, help="validation predictions file (default: <out>_preds.csv.gz)")
     ap.add_argument("--extra-features", default="none", choices=sorted(EXTRA), help="e03: add src/features_xs.py inputs")
+    ap.add_argument("--eval-start", default=None, help="E05 walk-forward fold: first evaluation date (with --eval-end)")
+    ap.add_argument("--eval-end", default=None, help="E05 walk-forward fold: last evaluation date")
     args = ap.parse_args(argv)
     out = ROOT / args.out
     pred_path = ROOT / args.preds if args.preds else out.with_name(out.stem + "_preds.csv.gz")
-    data, info = build_dataset(extra=args.extra_features)
+    data, info = build_dataset(extra=args.extra_features, fold=fold_arg(args))
     tr, va = data[data.split == "train"], data[data.split == "val"]
     assert not (data.split == "test").loc[va.index].any()
     feats = F.FEATURES + EXTRA[args.extra_features]
