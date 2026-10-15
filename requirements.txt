@@ -1,11 +1,42 @@
-# Pinned environment shared by PC and Colab (Phase 1.20). Add exact versions as packages are adopted.
-# Versions below are what is installed in the PC's .venv (Python 3.14.6), read 2026-09-25.
+# Software environments used by this project (register Phase 1.20).
+# Rewritten 2026-10-16 to match what was actually used.
 #
-# Crawl-only (PC). Colab never runs the crawler, so these are not needed there.
+# There is NO single environment shared by PC and Colab. Four were used.
+# Every result file in data/derived records the versions it ran with, and every
+# Colab notebook checks the input data sha256 and runs tests/test_pipeline.py
+# before training. Results agree across CPU and GPU within one seed std.
+#
+# Only section 1 is an installable pin list. Sections 2-4 are records (commented
+# out): the environments differ, and Colab uses its own preinstalled packages.
+#
+# --- 1. PC crawl: repo .venv, Python 3.14.6 ------------------------------------
+#        pip install -r requirements.txt
 playwright==1.56.0
 greenlet==3.5.6
 pyee==13.0.1
 typing_extensions==4.16.0
 #
-# Analysis stack (pandas, numpy, torch, transformers, scikit-learn, xgboost): not installed yet.
-# Pin each one here, from `pip freeze`, when it is first used, and check the same version installs on Colab.
+# --- 2. PC sentiment fine-tuning and corpus scoring (CPU) -----------------------
+#        A separate Python env outside the repo. Recorded in
+#        data/derived/sentiment_scores.json and sentiment_finetune/runs.jsonl:
+#          python 3.12.13
+#          torch==2.14.1+cpu
+#          transformers==5.18.0
+#        PC pipeline tests also passed with pandas==2.3.3, numpy==2.2.6
+#        (log 2026-10-15; not recorded whether this was the same env).
+#
+# --- 3. Claude's cloud workspace: XGBoost, LSTM, PatchTST, main model v0 (CPU) --
+#          python 3.13
+#          pandas==3.0.5
+#          numpy==2.5.3
+#          scikit-learn==1.9.1
+#          xgboost==3.4.1
+#          torch==2.14.1+cu130  (as recorded in baselines_deep.json, main_model_v0.json)
+#
+# --- 4. Google Colab GPU runs (NVIDIA L4) ----------------------------------------
+#        No install step; Colab's preinstalled packages on the run date.
+#          torch 2.11.0+cu130  (recorded with the 2026-10-15 GPU results)
+#
+# Other third-party packages imported in src/, scripts/ or tests/ whose versions
+# were not recorded: pythainlp, sentencepiece, tokenizers, huggingface_hub, emoji,
+# matplotlib.
