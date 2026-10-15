@@ -7,9 +7,14 @@ anything near 10% means a leak. Trend: the model should clear majority-class on 
 VALIDATION ONLY. The test block is sealed until Phase 6; this script never scores it.
 
   python scripts/baselines_tabular.py            # writes data/derived/baselines_tabular.json
+  python scripts/baselines_tabular.py --out results/xgb.json   # E02b: also writes results/xgb_preds.csv.gz
+
+Every validation prediction (class probabilities, predicted class and return forecast, per seed) is written to
+<out>_preds.csv.gz, keyed by symbol and date, so it can be blended with the deep models' prediction files.
 """
 from __future__ import annotations
 
+import argparse
 import json
 import statistics
 import subprocess
@@ -77,18 +82,28 @@ def confusion(y_true, y_pred):
     return confusion_matrix(y_true, y_pred, labels=[0, 1, 2]).tolist()
 
 
-def main():
+def main(argv=None):
+    import xgboost
     from xgboost import XGBClassifier, XGBRegressor
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--out", default="data/derived/baselines_tabular.json")
+    ap.add_argument("--preds", default=None, help="validation predictions file (default: <out>_preds.csv.gz)")
+    args = ap.parse_args(argv)
+    out = ROOT / args.out
+    pred_path = ROOT / args.preds if args.preds else out.with_name(out.stem + "_preds.csv.gz")
     data, info = build_dataset()
     tr, va = data[data.split == "train"], data[data.split == "val"]
     assert not (data.split == "test").loc[va.index].any()
     Xtr, Xva = tr[F.FEATURES], va[F.FEATURES]
     res = {"computed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "git_commit": git_commit(),
-           "evaluated_on": "validation only (test sealed until Phase 6)", "features": F.FEATURES, "xgb_params": XGB,
-           "seeds": list(SEEDS), "data": info, "results": {}}
+           "xgboost": xgboost.__version__, "evaluated_on": "validation only (test sealed until Phase 6)",
+           "features": F.FEATURES, "xgb_params": XGB, "seeds": list(SEEDS), "data": info, "results": {},
+           "preds_file": pred_path.name}
+    preds = va[["symbol", "date"]].reset_index(drop=True).copy()      # one row per validation stock-day
     for h in L.HORIZONS:
         ytr, yva = tr[f"y_{h}"].to_numpy(), va[f"y_{h}"].to_numpy()
         rtr, rva = tr[f"fwd_{h}"].to_numpy(), va[f"fwd_{h}"].to_numpy()
+        preds[f"y_{h}"] = yva; preds[f"fwd_{h}"] = rva
         maj = M.majority_class(ytr)
         k = info[f"h{h}"]["k"]
         past = L.classify(va[f"r_{h}"].to_numpy(), va[f"sigma_{h}"].to_numpy(), k)   # past h-day move, same k and sigma
@@ -104,9 +119,15 @@ def main():
         for seed in SEEDS:
             clf = XGBClassifier(objective="multi:softprob", num_class=3, random_state=seed, **XGB).fit(Xtr, ytr)
             yhat = clf.predict(Xva)
+            prob = clf.predict_proba(Xva)
+            assert (prob.argmax(1) == yhat).all(), "predicted class must equal the most likely class"
+            preds[f"xgb_s{seed}_class{h}"] = yhat
+            for c, cls in enumerate(L.CLASSES):
+                preds[f"xgb_s{seed}_p{h}_{cls}"] = prob[:, c].round(6)
             cls_runs.append({"seed": seed, **M.trend_metrics(yva, yhat), "confusion": confusion(yva, yhat)})
             reg = XGBRegressor(objective="reg:squarederror", random_state=seed, **XGB).fit(Xtr, rtr)
             pr = reg.predict(Xva)
+            preds[f"xgb_s{seed}_r{h}"] = pr.round(6)
             reg_runs.append({"seed": seed, **M.return_metrics(rva, pr), "corr_with_outcome": round(float(np.corrcoef(pr, rva)[0, 1]), 4)})
 
         def agg(runs, keys):
@@ -119,10 +140,10 @@ def main():
               f"vs majority {floors['majority_class']['macro_f1']} / random {floors['stratified_random_expected']['macro_f1']} / "
               f"continues {floors['trend_continues']['macro_f1']} / reverses {floors['trend_reverses']['macro_f1']}  |  "
               f"R2_OS xgb {res['results'][f'h{h}']['model']['xgb_return']['r2_os_vs_zero']}")
-    out = ROOT / "data/derived/baselines_tabular.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(res, indent=2, default=str), encoding="utf-8")
-    print(f"wrote {out}")
+    preds.to_csv(pred_path, index=False)
+    print(f"wrote {out} and {pred_path}")
 
 
 if __name__ == "__main__":
