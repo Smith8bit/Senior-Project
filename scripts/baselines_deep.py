@@ -9,7 +9,9 @@ multi-scale comparison differs in exactly one thing. RevIN on (hard rule 8).
 Fixed settings, no tuning. Early stopping uses an inner hold-out = the last 10% of TRAINING dates
 (after a 10-day purge); the validation block is never used for any choice. Test stays sealed.
 
-  python scripts/baselines_deep.py [--models lstm patchtst] [--seeds ...] [--max-epochs 15]
+  python scripts/baselines_deep.py [--models lstm patchtst] [--seeds ...] [--max-epochs 15] [--lr 1e-3] [--dropout 0.1] [--patience 3]
+  python scripts/baselines_deep.py --models multiscale_sector --news data/derived/sentiment_scores.csv \
+      --lr 1e-4 --dropout 0.2 --max-epochs 30 --patience 5 --out results/main_model_v1_news_p41.json   # Phase 4.1
   python scripts/baselines_deep.py --models multiscale_sector --out data/derived/main_model_v0.json   # main model, no sentiment yet
 
 Each run also stores a 3x3 confusion grid per horizon (rows = actual down/flat/up, columns = predicted) and writes
@@ -44,7 +46,9 @@ from multiscale_patchtst import MultiScalePatchTST, UncertaintyWeightedLoss  # n
 
 LOOKBACK = 60
 SEEDS = (20261015, 20261016, 20261017)
-SET = dict(lr=1e-4, weight_decay=0.01, batch_size=256, max_epochs=15, patience=10, inner_es_share=0.10, purge=10)
+# Defaults = the v1 run (commit 0da8473), so the logged v0/v1 commands still reproduce. Phase 4.1 overrides
+# lr / dropout / max-epochs / patience on the command line; every run records the values it used under "settings".
+SET = dict(lr=1e-3, dropout=0.1, weight_decay=0.01, batch_size=256, max_epochs=15, patience=3, inner_es_share=0.10, purge=10)
 
 
 class LSTMBaseline(nn.Module):
@@ -65,17 +69,17 @@ class LSTMBaseline(nn.Module):
 MAIN_PATCHES = ((5, 5), (20, 10))      # Phase 1.11 decision, 2026-10-15
 
 
-def make_model(name, n_channels, n_groups=0):
+def make_model(name, n_channels, n_groups=0, dropout=0.1):
     if name == "lstm":
-        return LSTMBaseline(n_channels)
+        return LSTMBaseline(n_channels, dropout=dropout)
     if name == "patchtst":                       # baseline: single scale, PatchTST defaults
-        return MultiScalePatchTST(n_channels, lookback=LOOKBACK, patches=((16, 8),))
+        return MultiScalePatchTST(n_channels, lookback=LOOKBACK, patches=((16, 8),), dropout=dropout)
     if name == "multiscale":                     # main architecture without the sector label
-        return MultiScalePatchTST(n_channels, lookback=LOOKBACK, patches=MAIN_PATCHES)
+        return MultiScalePatchTST(n_channels, lookback=LOOKBACK, patches=MAIN_PATCHES, dropout=dropout)
     if name == "multiscale_sector":              # main model (Phase 1.11-1.14 decisions)
-        return MultiScalePatchTST(n_channels, lookback=LOOKBACK, patches=MAIN_PATCHES, n_groups=n_groups)
+        return MultiScalePatchTST(n_channels, lookback=LOOKBACK, patches=MAIN_PATCHES, n_groups=n_groups, dropout=dropout)
     if name == "singlescale_sector":             # ablation partner: only the multi-scale part removed
-        return MultiScalePatchTST(n_channels, lookback=LOOKBACK, patches=((16, 8),), n_groups=n_groups)
+        return MultiScalePatchTST(n_channels, lookback=LOOKBACK, patches=((16, 8),), n_groups=n_groups, dropout=dropout)
     raise ValueError(name)
 
 
@@ -113,7 +117,7 @@ def train_one(name, seed, Xfit, Yfit, Rfit, Xes, Yes, Gfit=None, Ges=None, n_gro
     torch.manual_seed(seed); np.random.seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
-    model = make_model(name, Xfit.shape[-1], n_groups).to(DEVICE)
+    model = make_model(name, Xfit.shape[-1], n_groups, SET["dropout"]).to(DEVICE)
     loss_fn = UncertaintyWeightedLoss().to(DEVICE)
     opt = torch.optim.AdamW(list(model.parameters()) + list(loss_fn.parameters()), lr=SET["lr"], weight_decay=SET["weight_decay"])
     rng = np.random.default_rng(seed)
@@ -147,12 +151,16 @@ def main(argv=None):
     ap.add_argument("--models", nargs="*", default=["lstm", "patchtst"])
     ap.add_argument("--seeds", nargs="*", type=int, default=list(SEEDS))
     ap.add_argument("--max-epochs", type=int, default=SET["max_epochs"])
+    ap.add_argument("--lr", type=float, default=SET["lr"], help="AdamW learning rate (v1: 1e-3; Phase 4.1: 1e-4)")
+    ap.add_argument("--dropout", type=float, default=SET["dropout"], help="dropout in every model (v1: 0.1; Phase 4.1: 0.2)")
+    ap.add_argument("--patience", type=int, default=SET["patience"], help="early-stopping patience in epochs on the inner hold-out")
     ap.add_argument("--threads", type=int, default=0)
     ap.add_argument("--out", default="data/derived/baselines_deep.json")
     ap.add_argument("--news", default=None, help="add daily sentiment channels from this scores file (e.g. data/derived/sentiment_scores.csv)")
     ap.add_argument("--preds", default=None, help="validation predictions file (default: <out>_preds.csv.gz)")
     args = ap.parse_args(argv)
-    SET["max_epochs"] = args.max_epochs
+    SET.update(max_epochs=args.max_epochs, lr=args.lr, dropout=args.dropout, patience=args.patience)
+    print("settings: " + ", ".join(f"{k}={SET[k]}" for k in ("lr", "dropout", "max_epochs", "patience")), flush=True)
     if args.threads:
         torch.set_num_threads(args.threads)
 
