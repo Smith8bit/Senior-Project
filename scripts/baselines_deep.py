@@ -49,6 +49,8 @@ SEEDS = (20261015, 20261016, 20261017)
 # Defaults = the v1 run (commit 0da8473), so the logged v0/v1 commands still reproduce. Phase 4.1 overrides
 # lr / dropout / max-epochs / patience on the command line; every run records the values it used under "settings".
 SET = dict(lr=1e-3, dropout=0.1, weight_decay=0.01, batch_size=256, max_epochs=15, patience=3, inner_es_share=0.10, purge=10)
+# Phase 4 switches (experiment ledger E10, E11, E16). Defaults reproduce every earlier run exactly.
+OPT = dict(revin=True, cls_only=False, label_smoothing=0.0)
 
 
 class LSTMBaseline(nn.Module):
@@ -71,6 +73,13 @@ SMALL = dict(d_model=32, n_heads=4, n_layers=1, d_ff=64, d_channel=16)   # E04a 
 
 
 def make_model(name, n_channels, n_groups=0, dropout=0.1):
+    m = _make_model(name, n_channels, n_groups, dropout)
+    if isinstance(m, MultiScalePatchTST) and not OPT["revin"]:
+        m.revin = None                           # E10: no per-window normalisation (inputs stay train-scaled)
+    return m
+
+
+def _make_model(name, n_channels, n_groups=0, dropout=0.1):
     if name == "lstm":
         return LSTMBaseline(n_channels, dropout=dropout)
     if name == "patchtst":                       # baseline: single scale, PatchTST defaults
@@ -88,6 +97,28 @@ def make_model(name, n_channels, n_groups=0, dropout=0.1):
 
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")   # Colab GPU when present, else CPU
+
+
+class ClsOnlyLoss(nn.Module):
+    """E11: cross-entropy on the trend classes only; the return head gets no gradient. Same interface as
+    UncertaintyWeightedLoss (log_var kept, frozen at 0, so the run JSON's loss_weights read 1.0 / 1.0)."""
+    def __init__(self, label_smoothing: float = 0.0):
+        super().__init__()
+        self.log_var = nn.Parameter(torch.zeros(2), requires_grad=False)
+        self.ce = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
+
+    def forward(self, out, trend, returns):
+        l_cls = self.ce(out["trend_logits"].reshape(-1, out["trend_logits"].shape[-1]), trend.reshape(-1))
+        return l_cls, {"ce": l_cls.item()}
+
+
+def make_loss():
+    if OPT["cls_only"]:
+        return ClsOnlyLoss(OPT["label_smoothing"])
+    loss_fn = UncertaintyWeightedLoss()
+    if OPT["label_smoothing"]:
+        loss_fn.ce = nn.CrossEntropyLoss(label_smoothing=OPT["label_smoothing"])   # E16
+    return loss_fn
 
 
 def _t(a):
@@ -114,7 +145,11 @@ def confusion(y_true, y_pred):
 
 
 def macro_f1_mean(Y, P):
-    return float(np.mean([M.trend_metrics(Y[:, j], P[:, j].argmax(-1))["macro_f1"] for j in range(Y.shape[1])]))
+    return float(np.mean(macro_f1_each(Y, P)))
+
+
+def macro_f1_each(Y, P):
+    return [M.trend_metrics(Y[:, j], P[:, j].argmax(-1))["macro_f1"] for j in range(Y.shape[1])]
 
 
 def train_one(name, seed, Xfit, Yfit, Rfit, Xes, Yes, Gfit=None, Ges=None, n_groups=0):
@@ -122,10 +157,12 @@ def train_one(name, seed, Xfit, Yfit, Rfit, Xes, Yes, Gfit=None, Ges=None, n_gro
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
     model = make_model(name, Xfit.shape[-1], n_groups, SET["dropout"]).to(DEVICE)
-    loss_fn = UncertaintyWeightedLoss().to(DEVICE)
+    loss_fn = make_loss().to(DEVICE)
     opt = torch.optim.AdamW(list(model.parameters()) + list(loss_fn.parameters()), lr=SET["lr"], weight_decay=SET["weight_decay"])
     rng = np.random.default_rng(seed)
     best, best_state, best_ep, bad, hist = -1.0, None, 0, 0, []
+    nh = Yes.shape[1]                       # E12: best epoch tracked per horizon too (does not change training)
+    best_h, best_ep_h, state_h = [-1.0] * nh, [0] * nh, [None] * nh
     for ep in range(1, SET["max_epochs"] + 1):
         model.train(); t0 = time.time()
         order = rng.permutation(len(Xfit)); tot = 0.0
@@ -135,7 +172,12 @@ def train_one(name, seed, Xfit, Yfit, Rfit, Xes, Yes, Gfit=None, Ges=None, n_gro
             loss, _ = loss_fn(out, _t(Yfit[b]), _t(Rfit[b]))
             opt.zero_grad(); loss.backward(); nn.utils.clip_grad_norm_(model.parameters(), 1.0); opt.step()
             tot += loss.item() * len(b)
-        es = macro_f1_mean(Yes, predict(model, Xes, Ges)[0])
+        es_each = macro_f1_each(Yes, predict(model, Xes, Ges)[0])
+        es = float(np.mean(es_each))
+        for j in range(nh):
+            if es_each[j] > best_h[j]:
+                best_h[j], best_ep_h[j] = es_each[j], ep
+                state_h[j] = {k: v.detach().clone() for k, v in model.state_dict().items()}
         hist.append({"epoch": ep, "train_loss": round(tot / len(Xfit), 5), "es_macro_f1": round(es, 4), "sec": round(time.time() - t0, 1)})
         print(f"    {name} seed {seed} ep {ep}: loss {tot / len(Xfit):.4f}  inner-ES macro-F1 {es:.4f}  ({time.time() - t0:.0f}s)", flush=True)
         if es > best:
@@ -146,8 +188,10 @@ def train_one(name, seed, Xfit, Yfit, Rfit, Xes, Yes, Gfit=None, Ges=None, n_gro
             if bad >= SET["patience"]:
                 break
     model.load_state_dict(best_state)
-    return model, {"best_epoch": best_ep, "best_inner_es_macro_f1": round(best, 4), "history": hist,
-                   "loss_weights": {"w_ce": round(float(torch.exp(-loss_fn.log_var[0].detach())), 4), "w_mse": round(float(torch.exp(-loss_fn.log_var[1].detach())), 4)}}
+    meta = {"best_epoch": best_ep, "best_inner_es_macro_f1": round(best, 4), "history": hist,
+            "best_epoch_per_horizon": best_ep_h, "best_inner_es_per_horizon": [round(b, 4) for b in best_h],
+            "loss_weights": {"w_ce": round(float(torch.exp(-loss_fn.log_var[0].detach())), 4), "w_mse": round(float(torch.exp(-loss_fn.log_var[1].detach())), 4)}}
+    return model, meta, state_h
 
 
 def main(argv=None):
@@ -165,9 +209,13 @@ def main(argv=None):
     ap.add_argument("--extra-features", default="none", choices=sorted(BT.EXTRA), help="e03: add src/features_xs.py inputs")
     ap.add_argument("--eval-start", default=None, help="E05 walk-forward fold: first evaluation date (with --eval-end)")
     ap.add_argument("--eval-end", default=None, help="E05 walk-forward fold: last evaluation date")
+    ap.add_argument("--no-revin", action="store_true", help="E10: switch off per-window normalisation (RevIN)")
+    ap.add_argument("--cls-only", action="store_true", help="E11: train on the trend classes only (no return loss)")
+    ap.add_argument("--label-smoothing", type=float, default=0.0, help="E16: cross-entropy label smoothing (e.g. 0.1)")
     args = ap.parse_args(argv)
+    OPT.update(revin=not args.no_revin, cls_only=args.cls_only, label_smoothing=args.label_smoothing)
     SET.update(max_epochs=args.max_epochs, lr=args.lr, dropout=args.dropout, patience=args.patience)
-    print("settings: " + ", ".join(f"{k}={SET[k]}" for k in ("lr", "dropout", "max_epochs", "patience")), flush=True)
+    print("settings: " + ", ".join(f"{k}={SET[k]}" for k in ("lr", "dropout", "max_epochs", "patience")) + f", options={OPT}", flush=True)
     if args.threads:
         torch.set_num_threads(args.threads)
 
@@ -213,7 +261,7 @@ def main(argv=None):
            "script_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
            "torch": torch.__version__, "threads": torch.get_num_threads(), "device": str(DEVICE),
            "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None, "evaluated_on": "validation only (test sealed)",
-           "settings": SET | {"lookback": LOOKBACK, "channels": channels, "news_file": args.news},
+           "settings": SET | {"lookback": LOOKBACK, "channels": channels, "news_file": args.news, "options": dict(OPT)},
            "inner_es": {"fit_end": str(pd.Timestamp(fit_end).date()), "es_start": str(pd.Timestamp(es_start).date()),
                         "rows_fit": len(fit), "rows_es": len(es)},
            "data": info, "floors": floors, "models": {}}
@@ -229,7 +277,7 @@ def main(argv=None):
         runs = []
         for seed in args.seeds:
             t0 = time.time()
-            model, meta = train_one(name, seed, X["fit"], Y["fit"], Rfit, X["es"], Y["es"], G["fit"], G["es"], len(sec_id))
+            model, meta, state_h = train_one(name, seed, X["fit"], Y["fit"], Rfit, X["es"], Y["es"], G["fit"], G["es"], len(sec_id))
             P, R = predict(model, X["val"], G["val"])
             per_h = {}
             for j, h in enumerate(L.HORIZONS):
@@ -242,8 +290,18 @@ def main(argv=None):
                 for c, cls in enumerate(L.CLASSES):
                     preds[f"{name}_s{seed}_p{h}_{cls}"] = P[:, j, c].round(6)
                 preds[f"{name}_s{seed}_r{h}"] = rp.round(6)
+            n_params = sum(p.numel() for p in model.parameters())
+            per_h_best = {}                  # E12: score each horizon with the epoch that was best for that horizon
+            for j, h in enumerate(L.HORIZONS):
+                model.load_state_dict(state_h[j])
+                Pj = predict(model, X["val"], G["val"])[0][:, j]
+                yj = Pj.argmax(-1)
+                per_h_best[f"h{h}"] = {**M.trend_metrics(Y["val"][:, j], yj), "confusion": confusion(Y["val"][:, j], yj),
+                                       "best_epoch": meta["best_epoch_per_horizon"][j]}
+                for c, cls in enumerate(L.CLASSES):
+                    preds[f"{name}_ph_s{seed}_p{h}_{cls}"] = Pj[:, c].round(6)
             runs.append({"seed": seed, "seconds": round(time.time() - t0, 1),
-                         "params": sum(p.numel() for p in model.parameters()), **meta, "val": per_h})
+                         "params": n_params, **meta, "val": per_h, "val_per_horizon_best": per_h_best})
             print(f"  {name} seed {seed}: " + "  ".join(f"h{h} F1 {per_h[f'h{h}']['macro_f1']:.3f}" for h in L.HORIZONS), flush=True)
             res["models"][name] = {"runs": runs}
             out_path.write_text(json.dumps(res, indent=2, default=str), encoding="utf-8")   # save after every run
