@@ -1,0 +1,356 @@
+{
+  "computed_at": "2026-10-15T09:03:53+00:00",
+  "target": "sentiment",
+  "config": "wisesight+ticker_section_headline",
+  "exam_labels_sha256": "0c693969cbaebc3936383556a1f7df809bd88c086d7a5980f469a4d6a1ea4d22",
+  "primary_measure": "about_stock (exam relevance yes or partly)",
+  "primary_n": 123,
+  "kappa_mean": 0.5689,
+  "kappa_std": 0.0197,
+  "macro_f1_mean": 0.7347,
+  "kappa_mean_all_items": 0.6205,
+  "kappa_std_all_items": 0.0271,
+  "band_on_mean_kappa": "usable with the limitation stated",
+  "prediction_0.45_0.65": true,
+  "per_seed": [
+    {
+      "seed": 20261006,
+      "n": 250,
+      "kappa": 0.6502,
+      "macro_f1": 0.7757,
+      "accuracy": 0.784,
+      "kappa_ci95_bootstrap": [
+        0.5652,
+        0.7328
+      ],
+      "per_class": {
+        "pos": {
+          "precision": 0.8609,
+          "recall": 0.7795,
+          "f1": 0.8182,
+          "support": 127
+        },
+        "neu": {
+          "precision": 0.6989,
+          "recall": 0.8025,
+          "f1": 0.7471,
+          "support": 81
+        },
+        "neg": {
+          "precision": 0.7619,
+          "recall": 0.7619,
+          "f1": 0.7619,
+          "support": 42
+        }
+      },
+      "confusion_rows_human_cols_model": {
+        "pos": {
+          "pos": 99,
+          "neu": 23,
+          "neg": 5
+        },
+        "neu": {
+          "pos": 11,
+          "neu": 65,
+          "neg": 5
+        },
+        "neg": {
+          "pos": 5,
+          "neu": 5,
+          "neg": 32
+        }
+      },
+      "about_stock": {
+        "n": 123,
+        "kappa": 0.5763,
+        "macro_f1": 0.7274,
+        "accuracy": 0.7805,
+        "kappa_ci95_bootstrap": [
+          0.4292,
+          0.71
+        ],
+        "per_class": {
+          "pos": {
+            "precision": 0.8395,
+            "recall": 0.8718,
+            "f1": 0.8553,
+            "support": 78
+          },
+          "neu": {
+            "precision": 0.56,
+            "recall": 0.5385,
+            "f1": 0.549,
+            "support": 26
+          },
+          "neg": {
+            "precision": 0.8235,
+            "recall": 0.7368,
+            "f1": 0.7778,
+            "support": 19
+          }
+        },
+        "confusion_rows_human_cols_model": {
+          "pos": {
+            "pos": 68,
+            "neu": 9,
+            "neg": 1
+          },
+          "neu": {
+            "pos": 10,
+            "neu": 14,
+            "neg": 2
+          },
+          "neg": {
+            "pos": 3,
+            "neu": 2,
+            "neg": 14
+          }
+        }
+      },
+      "relevance_yes": {
+        "macro_f1": 0.7509,
+        "kappa": 0.5946,
+        "accuracy": 0.8125,
+        "n": 80
+      },
+      "half_A": {
+        "macro_f1": 0.7327,
+        "kappa": 0.5797,
+        "accuracy": 0.744,
+        "n": 125
+      },
+      "half_B": {
+        "macro_f1": 0.8055,
+        "kappa": 0.7127,
+        "accuracy": 0.824,
+        "n": 125
+      }
+    },
+    {
+      "seed": 20261007,
+      "n": 250,
+      "kappa": 0.6144,
+      "macro_f1": 0.7664,
+      "accuracy": 0.76,
+      "kappa_ci95_bootstrap": [
+        0.5269,
+        0.6953
+      ],
+      "per_class": {
+        "pos": {
+          "precision": 0.8571,
+          "recall": 0.7087,
+          "f1": 0.7759,
+          "support": 127
+        },
+        "neu": {
+          "precision": 0.6355,
+          "recall": 0.8395,
+          "f1": 0.7234,
+          "support": 81
+        },
+        "neg": {
+          "precision": 0.8421,
+          "recall": 0.7619,
+          "f1": 0.8,
+          "support": 42
+        }
+      },
+      "confusion_rows_human_cols_model": {
+        "pos": {
+          "pos": 90,
+          "neu": 34,
+          "neg": 3
+        },
+        "neu": {
+          "pos": 10,
+          "neu": 68,
+          "neg": 3
+        },
+        "neg": {
+          "pos": 5,
+          "neu": 5,
+          "neg": 32
+        }
+      },
+      "about_stock": {
+        "n": 123,
+        "kappa": 0.5465,
+        "macro_f1": 0.7298,
+        "accuracy": 0.7561,
+        "kappa_ci95_bootstrap": [
+          0.3941,
+          0.6814
+        ],
+        "per_class": {
+          "pos": {
+            "precision": 0.84,
+            "recall": 0.8077,
+            "f1": 0.8235,
+            "support": 78
+          },
+          "neu": {
+            "precision": 0.4848,
+            "recall": 0.6154,
+            "f1": 0.5424,
+            "support": 26
+          },
+          "neg": {
+            "precision": 0.9333,
+            "recall": 0.7368,
+            "f1": 0.8235,
+            "support": 19
+          }
+        },
+        "confusion_rows_human_cols_model": {
+          "pos": {
+            "pos": 63,
+            "neu": 15,
+            "neg": 0
+          },
+          "neu": {
+            "pos": 9,
+            "neu": 16,
+            "neg": 1
+          },
+          "neg": {
+            "pos": 3,
+            "neu": 2,
+            "neg": 14
+          }
+        }
+      },
+      "relevance_yes": {
+        "macro_f1": 0.7581,
+        "kappa": 0.5837,
+        "accuracy": 0.8,
+        "n": 80
+      },
+      "half_A": {
+        "macro_f1": 0.7344,
+        "kappa": 0.5723,
+        "accuracy": 0.736,
+        "n": 125
+      },
+      "half_B": {
+        "macro_f1": 0.7907,
+        "kappa": 0.6466,
+        "accuracy": 0.784,
+        "n": 125
+      }
+    },
+    {
+      "seed": 20261008,
+      "n": 250,
+      "kappa": 0.597,
+      "macro_f1": 0.7552,
+      "accuracy": 0.748,
+      "kappa_ci95_bootstrap": [
+        0.5131,
+        0.6807
+      ],
+      "per_class": {
+        "pos": {
+          "precision": 0.8529,
+          "recall": 0.685,
+          "f1": 0.7598,
+          "support": 127
+        },
+        "neu": {
+          "precision": 0.6239,
+          "recall": 0.8395,
+          "f1": 0.7158,
+          "support": 81
+        },
+        "neg": {
+          "precision": 0.8205,
+          "recall": 0.7619,
+          "f1": 0.7901,
+          "support": 42
+        }
+      },
+      "confusion_rows_human_cols_model": {
+        "pos": {
+          "pos": 87,
+          "neu": 36,
+          "neg": 4
+        },
+        "neu": {
+          "pos": 10,
+          "neu": 68,
+          "neg": 3
+        },
+        "neg": {
+          "pos": 5,
+          "neu": 5,
+          "neg": 32
+        }
+      },
+      "about_stock": {
+        "n": 123,
+        "kappa": 0.5838,
+        "macro_f1": 0.747,
+        "accuracy": 0.7805,
+        "kappa_ci95_bootstrap": [
+          0.4326,
+          0.7137
+        ],
+        "per_class": {
+          "pos": {
+            "precision": 0.8462,
+            "recall": 0.8462,
+            "f1": 0.8462,
+            "support": 78
+          },
+          "neu": {
+            "precision": 0.5333,
+            "recall": 0.6154,
+            "f1": 0.5714,
+            "support": 26
+          },
+          "neg": {
+            "precision": 0.9333,
+            "recall": 0.7368,
+            "f1": 0.8235,
+            "support": 19
+          }
+        },
+        "confusion_rows_human_cols_model": {
+          "pos": {
+            "pos": 66,
+            "neu": 12,
+            "neg": 0
+          },
+          "neu": {
+            "pos": 9,
+            "neu": 16,
+            "neg": 1
+          },
+          "neg": {
+            "pos": 3,
+            "neu": 2,
+            "neg": 14
+          }
+        }
+      },
+      "relevance_yes": {
+        "macro_f1": 0.7771,
+        "kappa": 0.626,
+        "accuracy": 0.825,
+        "n": 80
+      },
+      "half_A": {
+        "macro_f1": 0.7163,
+        "kappa": 0.5383,
+        "accuracy": 0.712,
+        "n": 125
+      },
+      "half_B": {
+        "macro_f1": 0.7848,
+        "kappa": 0.6477,
+        "accuracy": 0.784,
+        "n": 125
+      }
+    }
+  ]
+}

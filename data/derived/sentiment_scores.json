@@ -1,0 +1,24 @@
+{
+  "computed_at": "2026-10-15T10:05:51+00:00",
+  "config": "wisesight+ticker_section_headline",
+  "model_dirs": [
+    "C:\\Users\\HP\\Documents\\GitHub\\Senior Project\\models\\sentiment_finetune\\sentiment\\wisesight+ticker_section_headline\\seed20261006",
+    "C:\\Users\\HP\\Documents\\GitHub\\Senior Project\\models\\sentiment_finetune\\sentiment\\wisesight+ticker_section_headline\\seed20261007",
+    "C:\\Users\\HP\\Documents\\GitHub\\Senior Project\\models\\sentiment_finetune\\sentiment\\wisesight+ticker_section_headline\\seed20261008"
+  ],
+  "selection_sha256": "e475610da476a271192c3be12129e15871cd155147a42f17c7711b8f12a584e3",
+  "labels_sha256": "a810cde7d3d9dd0e7da3e6c5ef5f700612ba9969884fb3ca7dd52e452eb6b861",
+  "pairs": 35685,
+  "distinct_inputs": 34630,
+  "excluded_sections": [
+    "column",
+    "summary"
+  ],
+  "restatement_pairs": 9912,
+  "output_sha256": "c5c111f621ed29a9905ffa644cf761715cb3c4b8e8e8735897ae73cc2a56c0f6",
+  "git_commit": "3edb78a",
+  "versions": {
+    "torch": "2.14.1+cpu",
+    "transformers": "5.18.0"
+  }
+}

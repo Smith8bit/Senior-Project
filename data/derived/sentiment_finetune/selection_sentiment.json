@@ -1,0 +1,53 @@
+{
+  "selected_at": "2026-10-15T09:03:46+00:00",
+  "target": "sentiment",
+  "rule": "validation macro-F1, mean over 3 seeds",
+  "chosen": "wisesight+ticker_section_headline",
+  "table": [
+    {
+      "config": "wisesight+headline",
+      "val_macro_f1_mean": 0.7826,
+      "val_macro_f1_std": 0.0025,
+      "val_kappa_mean": 0.6487,
+      "seeds": [
+        20261006,
+        20261007,
+        20261008
+      ]
+    },
+    {
+      "config": "wisesight+ticker_section_headline",
+      "val_macro_f1_mean": 0.793,
+      "val_macro_f1_std": 0.0066,
+      "val_kappa_mean": 0.6662,
+      "seeds": [
+        20261006,
+        20261007,
+        20261008
+      ]
+    },
+    {
+      "config": "base+headline",
+      "val_macro_f1_mean": 0.7681,
+      "val_macro_f1_std": 0.0077,
+      "val_kappa_mean": 0.6408,
+      "seeds": [
+        20261006,
+        20261007,
+        20261008
+      ]
+    },
+    {
+      "config": "base+ticker_section_headline",
+      "val_macro_f1_mean": 0.7902,
+      "val_macro_f1_std": 0.0095,
+      "val_kappa_mean": 0.6804,
+      "seeds": [
+        20261006,
+        20261007,
+        20261008
+      ]
+    }
+  ],
+  "labels_sha256": "a810cde7d3d9dd0e7da3e6c5ef5f700612ba9969884fb3ca7dd52e452eb6b861"
+}

@@ -33,7 +33,9 @@ XGB = dict(n_estimators=300, max_depth=4, learning_rate=0.05, subsample=0.8, col
            min_child_weight=50, reg_lambda=1.0, tree_method="hist", n_jobs=4)   # fixed, untuned
 
 
-def build_dataset(root: Path = ROOT) -> tuple[pd.DataFrame, dict]:
+def build_dataset(root: Path = ROOT, return_full: bool = False):
+    """Sample rows (member stock-days with features and labels) + info; with return_full, also the full
+    daily frame (all trading days, incl. non-member days) that sequence models cut their windows from."""
     df = P.load_prices(root)
     df = F.add_features(df)
     df = L.add_forward_returns(df)
@@ -58,7 +60,7 @@ def build_dataset(root: Path = ROOT) -> tuple[pd.DataFrame, dict]:
                          "stocks_on_fallback_sigma": int(data.loc[~data.symbol.isin(per), "symbol"].nunique()),
                          "val_class_shares": {c: round(float((data.loc[data.split == "val", f"y_{h}"] == i).mean()), 4)
                                               for i, c in enumerate(L.CLASSES)}}
-    return data, info
+    return (data, info, df) if return_full else (data, info)
 
 
 def git_commit() -> str:

@@ -13,6 +13,8 @@ Design (proof-of-life version, 2026-10-06; choices recorded in the project log, 
     to exogenous variate tokens, is the planned comparison.)
   * Two heads (both kept, as in the approved proposal): trend logits [batch, horizon, 3] and
     returns [batch, horizon]. Loss weighting by learned uncertainty (Kendall, Gal & Cipolla, CVPR 2018).
+  * Optional group label (Phase 1.13 decision, 2026-10-15): a learned SET-sector embedding is concatenated
+    to the cross-channel vector before the heads. Index 0 = unknown sector. Off by default (n_groups=0).
 Positional encoding is a learnable absolute embedding per branch here; MTST uses relative encoding.
 """
 from __future__ import annotations
@@ -66,7 +68,7 @@ class PatchBranch(nn.Module):
 class MultiScalePatchTST(nn.Module):
     def __init__(self, n_channels: int, lookback: int = 60, patches=((5, 5), (20, 10)), horizons=(1, 5, 10),
                  n_classes: int = 3, d_model: int = 64, n_heads: int = 4, n_layers: int = 2, d_ff: int = 128,
-                 d_channel: int = 64, dropout: float = 0.1, revin: bool = True):
+                 d_channel: int = 64, dropout: float = 0.1, revin: bool = True, n_groups: int = 0, d_group: int = 16):
         super().__init__()
         self.n_channels, self.lookback, self.horizons = n_channels, lookback, tuple(horizons)
         self.revin = RevIN(n_channels) if revin else None
@@ -75,12 +77,14 @@ class MultiScalePatchTST(nn.Module):
         self.fuse_scales = nn.Sequential(nn.Linear(sum(b.out_dim for b in self.branches), d_channel), nn.GELU(), nn.Dropout(dropout))
         # Phase 1.12 option 1: late concatenation across channels
         h = len(self.horizons)
-        self.trunk = nn.Sequential(nn.Linear(n_channels * d_channel, d_channel * 2), nn.GELU(), nn.Dropout(dropout))
+        self.group_emb = nn.Embedding(n_groups + 1, d_group) if n_groups else None   # +1: index 0 = unknown
+        g = d_group if n_groups else 0
+        self.trunk = nn.Sequential(nn.Linear(n_channels * d_channel + g, d_channel * 2), nn.GELU(), nn.Dropout(dropout))
         self.trend_head = nn.Linear(d_channel * 2, h * n_classes)
         self.return_head = nn.Linear(d_channel * 2, h)
         self.n_classes = n_classes
 
-    def forward(self, x: torch.Tensor) -> dict:                 # x: [B, L, C], window ending at day t
+    def forward(self, x: torch.Tensor, group: torch.Tensor | None = None) -> dict:   # x: [B, L, C], window ending at day t
         B, L, C = x.shape
         if L != self.lookback or C != self.n_channels:
             raise ValueError(f"expected [batch, {self.lookback}, {self.n_channels}], got {list(x.shape)}")
@@ -88,7 +92,12 @@ class MultiScalePatchTST(nn.Module):
             x = self.revin(x)
         u = x.permute(0, 2, 1).reshape(B * C, L)                # channel independence: shared weights per channel
         per_channel = self.fuse_scales(torch.cat([b(u) for b in self.branches], dim=-1))   # [B*C, d_channel]
-        z = self.trunk(per_channel.reshape(B, C * per_channel.shape[-1]))
+        flat = per_channel.reshape(B, C * per_channel.shape[-1])
+        if self.group_emb is not None:
+            if group is None:
+                raise ValueError("this model was built with a group label; pass `group` (0 = unknown)")
+            flat = torch.cat([flat, self.group_emb(group)], dim=-1)
+        z = self.trunk(flat)
         return {"trend_logits": self.trend_head(z).reshape(B, len(self.horizons), self.n_classes),
                 "returns": self.return_head(z)}
 

@@ -64,6 +64,20 @@ def main():
         ok = True
     check(ok, "a window of the wrong length is refused")
 
+    mg = MultiScalePatchTST(n_channels=6, lookback=60, n_groups=5)
+    g = torch.tensor([1, 2, 0, 5])
+    og = mg(x, g)
+    check(og["trend_logits"].shape == (4, 3, 3), "sector label: model runs with a group per window")
+    mg.eval()
+    with torch.no_grad():
+        d1 = mg(x, torch.tensor([1, 1, 1, 1]))["returns"]; d2 = mg(x, torch.tensor([2, 2, 2, 2]))["returns"]
+    check(not torch.allclose(d1, d2), "sector label changes the output")
+    try:
+        mg(x); ok = False
+    except ValueError:
+        ok = True
+    check(ok, "a model built with a group label refuses a call without one")
+
     s = np.arange(200 * 6, dtype=np.float32).reshape(200, 6)
     X, Y = P.windows([s])
     t = P.LOOKBACK - 1

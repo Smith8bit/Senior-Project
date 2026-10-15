@@ -71,6 +71,19 @@ def main():
     k, shares = L.fit_k(np.random.default_rng(1).normal(size=20000), np.ones(20000))
     check(all(abs(v - 1 / 3) < 0.01 for v in shares.values()), f"fit_k balances classes (k={k}, {shares})")
 
+    # --- sequence windows
+    import sequences as SQ
+    full = F.add_features(df)
+    z = SQ.standardise_full(full, F.FEATURES, full.index[:5000])
+    tru = full[full.symbol == "TRUE"]
+    first_new = tru[tru.segment == 1].index[0]
+    rows = pd.Index([first_new + 3, tru.index[500]])
+    w = SQ.windows(full, z, rows, 60)
+    check(np.allclose(w[1], z[tru.index[500] - 59:tru.index[500] + 1]), "window = the 60 rows ending at t (inclusive), nothing after t")
+    check(np.all(w[0][:-4] == 0) and np.allclose(w[0][-4:], z[first_new:first_new + 4]), "window never reaches across a changeover")
+    s = pd.read_csv(ROOT / "data/sectors.csv")
+    check(set(s.symbol) == set(pd.read_csv(ROOT / "data/set50_membership.csv").symbol), "sector table covers all 70 union tickers")
+
     # --- split
     dates = pd.Series(pd.bdate_range("2020-01-01", periods=1000))
     b = SP.date_blocks(dates, purge=10)
