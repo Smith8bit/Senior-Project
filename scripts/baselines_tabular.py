@@ -28,6 +28,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 import features as F  # noqa: E402
+import features_xs as XS  # noqa: E402
 import labels as L  # noqa: E402
 import metrics as M  # noqa: E402
 import prices as P  # noqa: E402
@@ -38,11 +39,18 @@ XGB = dict(n_estimators=300, max_depth=4, learning_rate=0.05, subsample=0.8, col
            min_child_weight=50, reg_lambda=1.0, tree_method="hist", n_jobs=4)   # fixed, untuned
 
 
-def build_dataset(root: Path = ROOT, return_full: bool = False):
+EXTRA = {"none": [], "e03": XS.E03_FEATURES}
+
+
+def build_dataset(root: Path = ROOT, return_full: bool = False, extra: str = "none"):
     """Sample rows (member stock-days with features and labels) + info; with return_full, also the full
-    daily frame (all trading days, incl. non-member days) that sequence models cut their windows from."""
+    daily frame (all trading days, incl. non-member days) that sequence models cut their windows from.
+    extra="e03" adds the E03 inputs (src/features_xs.py). They are NOT part of the row filter, so the sample
+    rows are identical with and without them."""
     df = P.load_prices(root)
     df = F.add_features(df)
+    if extra != "none":
+        df = XS.add_xs_features(df, root)
     df = L.add_forward_returns(df)
     fwd = [f"fwd_{h}" for h in L.HORIZONS]
     keep = df.member & (df.date >= P.STUDY_START) & (df.date <= P.STUDY_END)
@@ -53,7 +61,8 @@ def build_dataset(root: Path = ROOT, return_full: bool = False):
     info = {"rows_total": int(len(data)), "blocks": {k: [str(pd.Timestamp(v[0]).date()), str(pd.Timestamp(v[1]).date())]
                                                      if isinstance(v, tuple) else v for k, v in blocks.items()},
             "rows_by_split": data.split.value_counts().to_dict(), "symbols": int(data.symbol.nunique()),
-            "dividend_coverage_zero": P.dividend_coverage(df).query("div_events == 0").symbol.tolist()}
+            "dividend_coverage_zero": P.dividend_coverage(df).query("div_events == 0").symbol.tolist(),
+            "extra_features": EXTRA[extra]}
     train = data[data.split == "train"]
     for h in L.HORIZONS:
         per, fb = L.fit_sigma(train, h)
@@ -88,16 +97,18 @@ def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="data/derived/baselines_tabular.json")
     ap.add_argument("--preds", default=None, help="validation predictions file (default: <out>_preds.csv.gz)")
+    ap.add_argument("--extra-features", default="none", choices=sorted(EXTRA), help="e03: add src/features_xs.py inputs")
     args = ap.parse_args(argv)
     out = ROOT / args.out
     pred_path = ROOT / args.preds if args.preds else out.with_name(out.stem + "_preds.csv.gz")
-    data, info = build_dataset()
+    data, info = build_dataset(extra=args.extra_features)
     tr, va = data[data.split == "train"], data[data.split == "val"]
     assert not (data.split == "test").loc[va.index].any()
-    Xtr, Xva = tr[F.FEATURES], va[F.FEATURES]
+    feats = F.FEATURES + EXTRA[args.extra_features]
+    Xtr, Xva = tr[feats], va[feats]
     res = {"computed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "git_commit": git_commit(),
            "xgboost": xgboost.__version__, "evaluated_on": "validation only (test sealed until Phase 6)",
-           "features": F.FEATURES, "xgb_params": XGB, "seeds": list(SEEDS), "data": info, "results": {},
+           "features": feats, "xgb_params": XGB, "seeds": list(SEEDS), "data": info, "results": {},
            "preds_file": pred_path.name}
     preds = va[["symbol", "date"]].reset_index(drop=True).copy()      # one row per validation stock-day
     for h in L.HORIZONS:

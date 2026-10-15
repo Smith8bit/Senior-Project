@@ -158,14 +158,15 @@ def main(argv=None):
     ap.add_argument("--out", default="data/derived/baselines_deep.json")
     ap.add_argument("--news", default=None, help="add daily sentiment channels from this scores file (e.g. data/derived/sentiment_scores.csv)")
     ap.add_argument("--preds", default=None, help="validation predictions file (default: <out>_preds.csv.gz)")
+    ap.add_argument("--extra-features", default="none", choices=sorted(BT.EXTRA), help="e03: add src/features_xs.py inputs")
     args = ap.parse_args(argv)
     SET.update(max_epochs=args.max_epochs, lr=args.lr, dropout=args.dropout, patience=args.patience)
     print("settings: " + ", ".join(f"{k}={SET[k]}" for k in ("lr", "dropout", "max_epochs", "patience")), flush=True)
     if args.threads:
         torch.set_num_threads(args.threads)
 
-    data, info, full = BT.build_dataset(return_full=True)
-    channels = list(F.FEATURES)
+    data, info, full = BT.build_dataset(return_full=True, extra=args.extra_features)
+    channels = list(F.FEATURES) + BT.EXTRA[args.extra_features]
     if args.news:                                   # daily sentiment channels, known at the close of each day
         import news_beyond_price as NB
         nf = NB.news_features(pd.read_csv(ROOT / args.news), full[["symbol", "date"]])
