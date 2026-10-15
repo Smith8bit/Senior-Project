@@ -67,6 +67,7 @@ class LSTMBaseline(nn.Module):
 
 
 MAIN_PATCHES = ((5, 5), (20, 10))      # Phase 1.11 decision, 2026-10-15
+SMALL = dict(d_model=32, n_heads=4, n_layers=1, d_ff=64, d_channel=16)   # E04a (experiment ledger), vs default 64/4/2/128/64
 
 
 def make_model(name, n_channels, n_groups=0, dropout=0.1):
@@ -78,6 +79,9 @@ def make_model(name, n_channels, n_groups=0, dropout=0.1):
         return MultiScalePatchTST(n_channels, lookback=LOOKBACK, patches=MAIN_PATCHES, dropout=dropout)
     if name == "multiscale_sector":              # main model (Phase 1.11-1.14 decisions)
         return MultiScalePatchTST(n_channels, lookback=LOOKBACK, patches=MAIN_PATCHES, n_groups=n_groups, dropout=dropout)
+    if name == "multiscale_sector_small":        # E04a: same architecture, ~1/10 of the weights (fixed, not searched)
+        return MultiScalePatchTST(n_channels, lookback=LOOKBACK, patches=MAIN_PATCHES, n_groups=n_groups, dropout=dropout,
+                                  **SMALL)
     if name == "singlescale_sector":             # ablation partner: only the multi-scale part removed
         return MultiScalePatchTST(n_channels, lookback=LOOKBACK, patches=((16, 8),), n_groups=n_groups, dropout=dropout)
     raise ValueError(name)
