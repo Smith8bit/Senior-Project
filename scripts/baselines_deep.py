@@ -42,6 +42,7 @@ import features as F  # noqa: E402
 import labels as L  # noqa: E402
 import metrics as M  # noqa: E402
 import sequences as SQ  # noqa: E402
+import stopping as STOP  # noqa: E402
 from multiscale_patchtst import MultiScalePatchTST, UncertaintyWeightedLoss  # noqa: E402
 
 LOOKBACK = 60
@@ -50,7 +51,7 @@ SEEDS = (20261015, 20261016, 20261017)
 # lr / dropout / max-epochs / patience on the command line; every run records the values it used under "settings".
 SET = dict(lr=1e-3, dropout=0.1, weight_decay=0.01, batch_size=256, max_epochs=15, patience=3, inner_es_share=0.10, purge=10)
 # Phase 4 switches (experiment ledger E10, E11, E16). Defaults reproduce every earlier run exactly.
-OPT = dict(revin=True, cls_only=False, label_smoothing=0.0)
+OPT = dict(revin=True, cls_only=False, label_smoothing=0.0, stop_rule="mean")   # stop_rule: E19 (src/stopping.py)
 
 
 class LSTMBaseline(nn.Module):
@@ -162,7 +163,7 @@ def train_one(name, seed, Xfit, Yfit, Rfit, Xes, Yes, Gfit=None, Ges=None, n_gro
     rng = np.random.default_rng(seed)
     best, best_state, best_ep, bad, hist = -1.0, None, 0, 0, []
     nh = Yes.shape[1]                       # E12: best epoch tracked per horizon too (does not change training)
-    best_h, best_ep_h, state_h = [-1.0] * nh, [0] * nh, [None] * nh
+    best_h, best_ep_h, state_h, bad_h = [-1.0] * nh, [0] * nh, [None] * nh, [0] * nh
     for ep in range(1, SET["max_epochs"] + 1):
         model.train(); t0 = time.time()
         order = rng.permutation(len(Xfit)); tot = 0.0
@@ -174,27 +175,28 @@ def train_one(name, seed, Xfit, Yfit, Rfit, Xes, Yes, Gfit=None, Ges=None, n_gro
             tot += loss.item() * len(b)
         es_each = macro_f1_each(Yes, predict(model, Xes, Ges)[0])
         es = float(np.mean(es_each))
-        for j in range(nh):
-            if es_each[j] > best_h[j]:
-                best_h[j], best_ep_h[j] = es_each[j], ep
-                state_h[j] = {k: v.detach().clone() for k, v in model.state_dict().items()}
-        hist.append({"epoch": ep, "train_loss": round(tot / len(Xfit), 5), "es_macro_f1": round(es, 4), "sec": round(time.time() - t0, 1)})
+        for j in STOP.update_per_horizon(best_h, bad_h, es_each):
+            best_ep_h[j] = ep
+            state_h[j] = {k: v.detach().clone() for k, v in model.state_dict().items()}
+        hist.append({"epoch": ep, "train_loss": round(tot / len(Xfit), 5), "es_macro_f1": round(es, 4),
+                     "es_per_horizon": [round(float(s), 4) for s in es_each], "sec": round(time.time() - t0, 1)})
         print(f"    {name} seed {seed} ep {ep}: loss {tot / len(Xfit):.4f}  inner-ES macro-F1 {es:.4f}  ({time.time() - t0:.0f}s)", flush=True)
         if es > best:
             best, best_ep, bad = es, ep, 0
             best_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
         else:
             bad += 1
-            if bad >= SET["patience"]:
-                break
+        if STOP.should_stop(OPT["stop_rule"], bad, bad_h, SET["patience"]):
+            break
     model.load_state_dict(best_state)
-    meta = {"best_epoch": best_ep, "best_inner_es_macro_f1": round(best, 4), "history": hist,
+    meta = {"best_epoch": best_ep, "best_inner_es_macro_f1": round(best, 4), "epochs_run": len(hist), "history": hist,
             "best_epoch_per_horizon": best_ep_h, "best_inner_es_per_horizon": [round(b, 4) for b in best_h],
             "loss_weights": {"w_ce": round(float(torch.exp(-loss_fn.log_var[0].detach())), 4), "w_mse": round(float(torch.exp(-loss_fn.log_var[1].detach())), 4)}}
     return model, meta, state_h
 
 
 def main(argv=None):
+    global LOOKBACK                      # E14: --lookback overrides the module default
     ap = argparse.ArgumentParser()
     ap.add_argument("--models", nargs="*", default=["lstm", "patchtst"])
     ap.add_argument("--seeds", nargs="*", type=int, default=list(SEEDS))
@@ -212,8 +214,12 @@ def main(argv=None):
     ap.add_argument("--no-revin", action="store_true", help="E10: switch off per-window normalisation (RevIN)")
     ap.add_argument("--cls-only", action="store_true", help="E11: train on the trend classes only (no return loss)")
     ap.add_argument("--label-smoothing", type=float, default=0.0, help="E16: cross-entropy label smoothing (e.g. 0.1)")
+    ap.add_argument("--stop-rule", default="mean", choices=STOP.RULES,
+                    help="E19: 'every' = stop only when every horizon has stalled for --patience epochs")
+    ap.add_argument("--lookback", type=int, default=LOOKBACK, help="E14: look-back window in trading days (default 60)")
     args = ap.parse_args(argv)
-    OPT.update(revin=not args.no_revin, cls_only=args.cls_only, label_smoothing=args.label_smoothing)
+    LOOKBACK = args.lookback
+    OPT.update(revin=not args.no_revin, cls_only=args.cls_only, label_smoothing=args.label_smoothing, stop_rule=args.stop_rule)
     SET.update(max_epochs=args.max_epochs, lr=args.lr, dropout=args.dropout, patience=args.patience)
     print("settings: " + ", ".join(f"{k}={SET[k]}" for k in ("lr", "dropout", "max_epochs", "patience")) + f", options={OPT}", flush=True)
     if args.threads:

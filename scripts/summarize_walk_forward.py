@@ -26,7 +26,10 @@ def main(argv=None):
     ap.add_argument("--fold", nargs=3, action="append", required=True, metavar=("LABEL", "DEEP_JSON", "XGB_JSON"))
     ap.add_argument("--model", default="multiscale_sector")
     ap.add_argument("--out", required=True)
+    ap.add_argument("--per-horizon-best", action="store_true", help="score the main model with each horizon's own best epoch (E12)")
+    ap.add_argument("--experiment", default="E05")
     args = ap.parse_args(argv)
+    key = "val_per_horizon_best" if args.per_horizon_best else "val"
 
     rows = []
     for label, dp, xp in args.fold:
@@ -39,7 +42,9 @@ def main(argv=None):
                "seeds": [r["seed"] for r in runs], "best_epochs": [r["best_epoch"] for r in runs],
                "best_inner_es": [r["best_inner_es_macro_f1"] for r in runs], "h": {}}
         for h in HS:
-            f1 = [r["val"][h]["macro_f1"] for r in runs]
+            if any(key not in r for r in runs):
+                raise SystemExit(f"{label}: {dp} has no {key} scores")
+            f1 = [r[key][h]["macro_f1"] for r in runs]
             fl = d["floors"][h]
             cont, rev = fl["trend_continues"]["macro_f1"], fl["trend_reverses"]["macro_f1"]
             rnd = fl["stratified_random_expected"]["macro_f1"]
@@ -70,7 +75,8 @@ def main(argv=None):
     print("\nacross folds:", json.dumps(summary))
     out = ROOT / args.out
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps({"experiment": "E05", "model": args.model, "margin": MARGIN, "folds": rows, "summary": summary,
+    out.write_text(json.dumps({"experiment": args.experiment, "model": args.model, "scored_on": key, "margin": MARGIN,
+                               "folds": rows, "summary": summary,
                                "evaluated_on": "walk-forward windows inside train + validation; test sealed"}, indent=2), encoding="utf-8")
     print(f"wrote {out}")
 

@@ -6,6 +6,9 @@
 For every run (and the control): mean +- std macro-F1 per horizon, difference from the control, and the per-horizon
 best-epoch score (E12). With --reference, the control's per-seed scores are compared with the earlier run of the same
 configuration (run-to-run reproducibility on the GPU). Validation only; the test block stays sealed.
+
+With --per-horizon-best (batch 2 on): every run is judged on its per-horizon best-epoch score (E12), the parent's
+scoring rule since batch 1. The shared-epoch score is still reported as "shared_epoch_mean".
 """
 from __future__ import annotations
 
@@ -29,7 +32,7 @@ def stats(xs):
     return round(statistics.mean(xs), 4), (round(statistics.stdev(xs), 4) if len(xs) > 1 else None)
 
 
-def describe(label, path):
+def describe(label, path, per_horizon_best=False):
     r, name, runs = load(path)
     out = {"label": label, "file": str(path), "model": name, "options": r["settings"].get("options"),
            "git_commit": r.get("git_commit"), "script_sha256": r.get("script_sha256"), "params": runs[0]["params"],
@@ -39,7 +42,14 @@ def describe(label, path):
         m, s = stats([x["val"][h]["macro_f1"] for x in runs])
         ph = [x["val_per_horizon_best"][h]["macro_f1"] for x in runs if "val_per_horizon_best" in x]
         pm, ps = stats(ph) if ph else (None, None)
-        out["h"][h] = {"mean": m, "std": s, "per_horizon_best_mean": pm, "per_horizon_best_std": ps}
+        out["h"][h] = {"mean": m, "std": s, "per_horizon_best_mean": pm, "per_horizon_best_std": ps,
+                       "shared_epoch_mean": m, "shared_epoch_std": s}
+        if per_horizon_best:
+            if pm is None:
+                raise SystemExit(f"{label}: no per-horizon best scores in {path}")
+            out["h"][h]["mean"], out["h"][h]["std"] = pm, ps
+    out["scored_on"] = "per-horizon best epoch" if per_horizon_best else "shared best epoch"
+    out["epochs_run"] = [x.get("epochs_run", len(x.get("history", []))) for x in runs]
     return out
 
 
@@ -49,10 +59,12 @@ def main(argv=None):
     ap.add_argument("--run", nargs=2, action="append", default=[], metavar=("LABEL", "JSON"))
     ap.add_argument("--reference", default=None, help="earlier run of the control configuration (reproducibility check)")
     ap.add_argument("--out", required=True)
+    ap.add_argument("--per-horizon-best", action="store_true", help="judge every run on its per-horizon best-epoch score (E12)")
+    ap.add_argument("--control-label", default="control")
     args = ap.parse_args(argv)
 
-    ctrl = describe("control", args.control)
-    rows = [ctrl] + [describe(lbl, p) for lbl, p in args.run]
+    ctrl = describe(args.control_label, args.control, args.per_horizon_best)
+    rows = [ctrl] + [describe(lbl, p, args.per_horizon_best) for lbl, p in args.run]
     for r in rows:
         for h in HS:
             v = r["h"][h]
@@ -81,6 +93,7 @@ def main(argv=None):
     out = ROOT / args.out
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps({"rows": rows, "pass_bar": PASS_BAR, "reproducibility": repro,
+                               "scored_on": "per-horizon best epoch" if args.per_horizon_best else "shared best epoch",
                                "evaluated_on": "validation only (test sealed)"}, indent=2), encoding="utf-8")
     print(f"wrote {out}")
 
