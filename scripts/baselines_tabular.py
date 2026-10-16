@@ -109,6 +109,8 @@ def main(argv=None):
     ap.add_argument("--extra-features", default="none", choices=sorted(EXTRA), help="e03: add src/features_xs.py inputs")
     ap.add_argument("--eval-start", default=None, help="E05 walk-forward fold: first evaluation date (with --eval-end)")
     ap.add_argument("--eval-end", default=None, help="E05 walk-forward fold: last evaluation date")
+    ap.add_argument("--importance", type=int, default=0, metavar="REPEATS",
+                    help="feature-importance diagnostic: XGBoost total-gain importance + permutation importance on validation")
     args = ap.parse_args(argv)
     out = ROOT / args.out
     pred_path = ROOT / args.preds if args.preds else out.with_name(out.stem + "_preds.csv.gz")
@@ -140,6 +142,16 @@ def main(argv=None):
         cls_runs, reg_runs = [], []
         for seed in SEEDS:
             clf = XGBClassifier(objective="multi:softprob", num_class=3, random_state=seed, **XGB).fit(Xtr, ytr)
+            if args.importance:                # diagnostic only; does not change the fitted model or its scores
+                import importance as IMP
+                gain = clf.get_booster().get_score(importance_type="total_gain")
+                Xv = Xva.to_numpy(dtype=np.float64).copy()
+                imp = IMP.permutation_importance(
+                    lambda A, _: [M.trend_metrics(yva, clf.predict(pd.DataFrame(A, columns=feats, index=Xva.index)))["macro_f1"]],
+                    Xv, None, list(feats), {"price_technical": list(F.FEATURES), "e03_relative": list(EXTRA[args.extra_features])},
+                    repeats=args.importance, seed=seed)
+                res.setdefault("importance", {}).setdefault(f"h{h}", []).append(
+                    {"seed": seed, "total_gain": {k: round(float(v), 3) for k, v in gain.items()}, **imp})
             yhat = clf.predict(Xva)
             prob = clf.predict_proba(Xva)
             assert (prob.argmax(1) == yhat).all(), "predicted class must equal the most likely class"

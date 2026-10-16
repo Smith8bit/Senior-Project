@@ -43,6 +43,7 @@ import labels as L  # noqa: E402
 import metrics as M  # noqa: E402
 import sequences as SQ  # noqa: E402
 import stopping as STOP  # noqa: E402
+import importance as IMP  # noqa: E402
 from multiscale_patchtst import MultiScalePatchTST, UncertaintyWeightedLoss  # noqa: E402
 
 LOOKBACK = 60
@@ -141,6 +142,10 @@ def predict(model, X, G=None, bs=2048):
     return np.concatenate(outs_p), np.concatenate(outs_r)
 
 
+def _uses_group(name):
+    return name in ("multiscale_sector", "multiscale_sector_small", "singlescale_sector")
+
+
 def confusion(y_true, y_pred):
     """3x3 counts, rows = actual (down, flat, up), columns = predicted (down, flat, up)."""
     return confusion_matrix(y_true, y_pred, labels=[0, 1, 2]).tolist()
@@ -220,6 +225,9 @@ def main(argv=None):
     ap.add_argument("--lookback", type=int, default=LOOKBACK, help="E14: look-back window in trading days (default 60)")
     ap.add_argument("--revin-stats", action="store_true",
                     help="E23: keep RevIN and feed each input's window mean and log-std to the heads (needs RevIN on)")
+    ap.add_argument("--importance", type=int, default=0, metavar="REPEATS",
+                    help="feature-importance diagnostic: permutation importance on validation with REPEATS shuffles "
+                         "(per-horizon best states); does not change training or scores")
     args = ap.parse_args(argv)
     LOOKBACK = args.lookback
     if args.revin_stats and args.no_revin:
@@ -312,8 +320,24 @@ def main(argv=None):
                                        "best_epoch": meta["best_epoch_per_horizon"][j]}
                 for c, cls in enumerate(L.CLASSES):
                     preds[f"{name}_ph_s{seed}_p{h}_{cls}"] = Pj[:, c].round(6)
-            runs.append({"seed": seed, "seconds": round(time.time() - t0, 1),
-                         "params": n_params, **meta, "val": per_h, "val_per_horizon_best": per_h_best})
+            run = {"seed": seed, "seconds": round(time.time() - t0, 1),
+                   "params": n_params, **meta, "val": per_h, "val_per_horizon_best": per_h_best}
+            if args.importance:                # diagnostic only: shuffles validation inputs of the trained model
+                t1 = time.time()
+
+                def score_fn(Xs, Gs):
+                    out = []
+                    for jj in range(len(L.HORIZONS)):
+                        model.load_state_dict(state_h[jj])
+                        out.append(M.trend_metrics(Y["val"][:, jj], predict(model, Xs, Gs)[0][:, jj].argmax(-1))["macro_f1"])
+                    return out
+                groups = {"price_technical": list(F.FEATURES), "e03_relative": list(BT.EXTRA[args.extra_features]),
+                          "news": [c for c in ("sent_mean", "sent_n", "has_news") if c in channels]}
+                run["importance"] = IMP.permutation_importance(score_fn, X["val"], G["val"] if _uses_group(name) else None,
+                                                               channels, groups, repeats=args.importance, seed=seed)
+                run["importance"]["seconds"] = round(time.time() - t1, 1)
+                print(f"    importance done ({time.time() - t1:.0f}s)", flush=True)
+            runs.append(run)
             print(f"  {name} seed {seed}: " + "  ".join(f"h{h} F1 {per_h[f'h{h}']['macro_f1']:.3f}" for h in L.HORIZONS), flush=True)
             res["models"][name] = {"runs": runs}
             out_path.write_text(json.dumps(res, indent=2, default=str), encoding="utf-8")   # save after every run
