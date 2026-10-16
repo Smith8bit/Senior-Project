@@ -51,7 +51,8 @@ SEEDS = (20261015, 20261016, 20261017)
 # lr / dropout / max-epochs / patience on the command line; every run records the values it used under "settings".
 SET = dict(lr=1e-3, dropout=0.1, weight_decay=0.01, batch_size=256, max_epochs=15, patience=3, inner_es_share=0.10, purge=10)
 # Phase 4 switches (experiment ledger E10, E11, E16). Defaults reproduce every earlier run exactly.
-OPT = dict(revin=True, cls_only=False, label_smoothing=0.0, stop_rule="mean")   # stop_rule: E19 (src/stopping.py)
+OPT = dict(revin=True, cls_only=False, label_smoothing=0.0, stop_rule="mean",   # stop_rule: E19 (src/stopping.py)
+           revin_stats=False)                                                     # E23: window mean / log-std re-injected
 
 
 class LSTMBaseline(nn.Module):
@@ -84,16 +85,16 @@ def _make_model(name, n_channels, n_groups=0, dropout=0.1):
     if name == "lstm":
         return LSTMBaseline(n_channels, dropout=dropout)
     if name == "patchtst":                       # baseline: single scale, PatchTST defaults
-        return MultiScalePatchTST(n_channels, lookback=LOOKBACK, patches=((16, 8),), dropout=dropout)
+        return MultiScalePatchTST(n_channels, revin_stats=OPT["revin_stats"], lookback=LOOKBACK, patches=((16, 8),), dropout=dropout)
     if name == "multiscale":                     # main architecture without the sector label
-        return MultiScalePatchTST(n_channels, lookback=LOOKBACK, patches=MAIN_PATCHES, dropout=dropout)
+        return MultiScalePatchTST(n_channels, revin_stats=OPT["revin_stats"], lookback=LOOKBACK, patches=MAIN_PATCHES, dropout=dropout)
     if name == "multiscale_sector":              # main model (Phase 1.11-1.14 decisions)
-        return MultiScalePatchTST(n_channels, lookback=LOOKBACK, patches=MAIN_PATCHES, n_groups=n_groups, dropout=dropout)
+        return MultiScalePatchTST(n_channels, revin_stats=OPT["revin_stats"], lookback=LOOKBACK, patches=MAIN_PATCHES, n_groups=n_groups, dropout=dropout)
     if name == "multiscale_sector_small":        # E04a: same architecture, ~1/10 of the weights (fixed, not searched)
-        return MultiScalePatchTST(n_channels, lookback=LOOKBACK, patches=MAIN_PATCHES, n_groups=n_groups, dropout=dropout,
+        return MultiScalePatchTST(n_channels, revin_stats=OPT["revin_stats"], lookback=LOOKBACK, patches=MAIN_PATCHES, n_groups=n_groups, dropout=dropout,
                                   **SMALL)
     if name == "singlescale_sector":             # ablation partner: only the multi-scale part removed
-        return MultiScalePatchTST(n_channels, lookback=LOOKBACK, patches=((16, 8),), n_groups=n_groups, dropout=dropout)
+        return MultiScalePatchTST(n_channels, revin_stats=OPT["revin_stats"], lookback=LOOKBACK, patches=((16, 8),), n_groups=n_groups, dropout=dropout)
     raise ValueError(name)
 
 
@@ -217,9 +218,14 @@ def main(argv=None):
     ap.add_argument("--stop-rule", default="mean", choices=STOP.RULES,
                     help="E19: 'every' = stop only when every horizon has stalled for --patience epochs")
     ap.add_argument("--lookback", type=int, default=LOOKBACK, help="E14: look-back window in trading days (default 60)")
+    ap.add_argument("--revin-stats", action="store_true",
+                    help="E23: keep RevIN and feed each input's window mean and log-std to the heads (needs RevIN on)")
     args = ap.parse_args(argv)
     LOOKBACK = args.lookback
-    OPT.update(revin=not args.no_revin, cls_only=args.cls_only, label_smoothing=args.label_smoothing, stop_rule=args.stop_rule)
+    if args.revin_stats and args.no_revin:
+        ap.error("--revin-stats re-injects what RevIN removes; it cannot be combined with --no-revin")
+    OPT.update(revin=not args.no_revin, cls_only=args.cls_only, label_smoothing=args.label_smoothing, stop_rule=args.stop_rule,
+               revin_stats=args.revin_stats)
     SET.update(max_epochs=args.max_epochs, lr=args.lr, dropout=args.dropout, patience=args.patience)
     print("settings: " + ", ".join(f"{k}={SET[k]}" for k in ("lr", "dropout", "max_epochs", "patience")) + f", options={OPT}", flush=True)
     if args.threads:

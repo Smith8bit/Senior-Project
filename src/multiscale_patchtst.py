@@ -13,6 +13,10 @@ Design (proof-of-life version, 2026-10-06; choices recorded in the project log, 
     to exogenous variate tokens, is the planned comparison.)
   * Two heads (both kept, as in the approved proposal): trend logits [batch, horizon, 3] and
     returns [batch, horizon]. Loss weighting by learned uncertainty (Kendall, Gal & Cipolla, CVPR 2018).
+  * Optional window statistics (experiment ledger E23, 2026-10-16): with revin_stats=True the per-channel window
+    mean and log-std that RevIN removes are concatenated to the cross-channel vector, so the heads see the
+    level as well as the shape. Simplified from the de-stationary idea of Non-stationary Transformers
+    (Liu, Wu, Wang & Long, NeurIPS 2022). Statistics come from the window itself only, like RevIN.
   * Optional group label (Phase 1.13 decision, 2026-10-15): a learned SET-sector embedding is concatenated
     to the cross-channel vector before the heads. Index 0 = unknown sector. Off by default (n_groups=0).
 Positional encoding is a learnable absolute embedding per branch here; MTST uses relative encoding.
@@ -68,7 +72,8 @@ class PatchBranch(nn.Module):
 class MultiScalePatchTST(nn.Module):
     def __init__(self, n_channels: int, lookback: int = 60, patches=((5, 5), (20, 10)), horizons=(1, 5, 10),
                  n_classes: int = 3, d_model: int = 64, n_heads: int = 4, n_layers: int = 2, d_ff: int = 128,
-                 d_channel: int = 64, dropout: float = 0.1, revin: bool = True, n_groups: int = 0, d_group: int = 16):
+                 d_channel: int = 64, dropout: float = 0.1, revin: bool = True, n_groups: int = 0, d_group: int = 16,
+                 revin_stats: bool = False):
         super().__init__()
         self.n_channels, self.lookback, self.horizons = n_channels, lookback, tuple(horizons)
         self.revin = RevIN(n_channels) if revin else None
@@ -79,7 +84,9 @@ class MultiScalePatchTST(nn.Module):
         h = len(self.horizons)
         self.group_emb = nn.Embedding(n_groups + 1, d_group) if n_groups else None   # +1: index 0 = unknown
         g = d_group if n_groups else 0
-        self.trunk = nn.Sequential(nn.Linear(n_channels * d_channel + g, d_channel * 2), nn.GELU(), nn.Dropout(dropout))
+        self.revin_stats = revin_stats                          # E23: 2 values per channel (window mean, log std)
+        s = 2 * n_channels if revin_stats else 0
+        self.trunk = nn.Sequential(nn.Linear(n_channels * d_channel + g + s, d_channel * 2), nn.GELU(), nn.Dropout(dropout))
         self.trend_head = nn.Linear(d_channel * 2, h * n_classes)
         self.return_head = nn.Linear(d_channel * 2, h)
         self.n_classes = n_classes
@@ -88,6 +95,9 @@ class MultiScalePatchTST(nn.Module):
         B, L, C = x.shape
         if L != self.lookback or C != self.n_channels:
             raise ValueError(f"expected [batch, {self.lookback}, {self.n_channels}], got {list(x.shape)}")
+        stats = None
+        if self.revin_stats:                                    # E23: the level and scale RevIN is about to remove
+            stats = torch.cat([x.mean(dim=1), 0.5 * torch.log(x.var(dim=1, unbiased=False) + 1e-5)], dim=-1)   # [B, 2C]
         if self.revin is not None:
             x = self.revin(x)
         u = x.permute(0, 2, 1).reshape(B * C, L)                # channel independence: shared weights per channel
@@ -97,6 +107,8 @@ class MultiScalePatchTST(nn.Module):
             if group is None:
                 raise ValueError("this model was built with a group label; pass `group` (0 = unknown)")
             flat = torch.cat([flat, self.group_emb(group)], dim=-1)
+        if stats is not None:
+            flat = torch.cat([flat, stats], dim=-1)
         z = self.trunk(flat)
         return {"trend_logits": self.trend_head(z).reshape(B, len(self.horizons), self.n_classes),
                 "returns": self.return_head(z)}
