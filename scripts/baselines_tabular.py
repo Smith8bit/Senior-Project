@@ -28,6 +28,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 import features as F  # noqa: E402
+import features_vol as VF  # noqa: E402
 import features_xs as XS  # noqa: E402
 import labels as L  # noqa: E402
 import metrics as M  # noqa: E402
@@ -39,7 +40,7 @@ XGB = dict(n_estimators=300, max_depth=4, learning_rate=0.05, subsample=0.8, col
            min_child_weight=50, reg_lambda=1.0, tree_method="hist", n_jobs=4)   # fixed, untuned
 
 
-EXTRA = {"none": [], "e03": XS.E03_FEATURES}
+EXTRA = {"none": [], "e03": XS.E03_FEATURES, "e03_e26": XS.E03_FEATURES + VF.VOL_FEATURES}   # e03_e26: batch 5
 
 
 def build_dataset(root: Path = ROOT, return_full: bool = False, extra: str = "none", fold: dict | None = None):
@@ -54,6 +55,8 @@ def build_dataset(root: Path = ROOT, return_full: bool = False, extra: str = "no
     df = F.add_features(df)
     if extra != "none":
         df = XS.add_xs_features(df, root)
+    if extra == "e03_e26":
+        df = VF.add_vol_features(df)
     df = L.add_forward_returns(df)
     fwd = [f"fwd_{h}" for h in L.HORIZONS]
     keep = df.member & (df.date >= P.STUDY_START) & (df.date <= P.STUDY_END)

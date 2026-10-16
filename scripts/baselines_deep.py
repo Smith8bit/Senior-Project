@@ -53,7 +53,15 @@ SEEDS = (20261015, 20261016, 20261017)
 SET = dict(lr=1e-3, dropout=0.1, weight_decay=0.01, batch_size=256, max_epochs=15, patience=3, inner_es_share=0.10, purge=10)
 # Phase 4 switches (experiment ledger E10, E11, E16). Defaults reproduce every earlier run exactly.
 OPT = dict(revin=True, cls_only=False, label_smoothing=0.0, stop_rule="mean",   # stop_rule: E19 (src/stopping.py)
-           revin_stats=False)                                                     # E23: window mean / log-std re-injected
+           revin_stats=False,                                                     # E23: window mean / log-std re-injected
+           # batches 5-7 (claude/batches-4-7-design-2026-10-16.md); defaults reproduce E21 exactly
+           patches=None,          # E07 / E08 / E09 / E15: patch scales of the multi-scale models (None = MAIN_PATCHES)
+           d_channel=64,          # E17: values per input after the patch branches
+           trunk_width=None,      # E17: width of the layer after the cross-channel vector (None = 2 x d_channel)
+           chan_mask=0.0,         # E28: probability of hiding each input of a training window (set to 0 = train mean)
+           context_min=0,         # E06: keep only the most recent m days of each training batch, m ~ U[context_min, lookback]
+           recent_weight=1.0,     # E13: loss weight of training rows dated before recent_from (1.0 = all years equal)
+           recent_from="2022-01-01")
 
 
 class LSTMBaseline(nn.Module):
@@ -87,10 +95,11 @@ def _make_model(name, n_channels, n_groups=0, dropout=0.1):
         return LSTMBaseline(n_channels, dropout=dropout)
     if name == "patchtst":                       # baseline: single scale, PatchTST defaults
         return MultiScalePatchTST(n_channels, revin_stats=OPT["revin_stats"], lookback=LOOKBACK, patches=((16, 8),), dropout=dropout)
+    main = dict(patches=OPT["patches"] or MAIN_PATCHES, d_channel=OPT["d_channel"], trunk_width=OPT["trunk_width"])
     if name == "multiscale":                     # main architecture without the sector label
-        return MultiScalePatchTST(n_channels, revin_stats=OPT["revin_stats"], lookback=LOOKBACK, patches=MAIN_PATCHES, dropout=dropout)
+        return MultiScalePatchTST(n_channels, revin_stats=OPT["revin_stats"], lookback=LOOKBACK, dropout=dropout, **main)
     if name == "multiscale_sector":              # main model (Phase 1.11-1.14 decisions)
-        return MultiScalePatchTST(n_channels, revin_stats=OPT["revin_stats"], lookback=LOOKBACK, patches=MAIN_PATCHES, n_groups=n_groups, dropout=dropout)
+        return MultiScalePatchTST(n_channels, revin_stats=OPT["revin_stats"], lookback=LOOKBACK, n_groups=n_groups, dropout=dropout, **main)
     if name == "multiscale_sector_small":        # E04a: same architecture, ~1/10 of the weights (fixed, not searched)
         return MultiScalePatchTST(n_channels, revin_stats=OPT["revin_stats"], lookback=LOOKBACK, patches=MAIN_PATCHES, n_groups=n_groups, dropout=dropout,
                                   **SMALL)
@@ -110,8 +119,14 @@ class ClsOnlyLoss(nn.Module):
         self.log_var = nn.Parameter(torch.zeros(2), requires_grad=False)
         self.ce = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
 
-    def forward(self, out, trend, returns):
-        l_cls = self.ce(out["trend_logits"].reshape(-1, out["trend_logits"].shape[-1]), trend.reshape(-1))
+    def forward(self, out, trend, returns, weight=None):
+        logits = out["trend_logits"].reshape(-1, out["trend_logits"].shape[-1])
+        if weight is None:
+            l_cls = self.ce(logits, trend.reshape(-1))
+        else:                              # E13: per-row weights, normalised within the batch
+            per = nn.functional.cross_entropy(logits, trend.reshape(-1), reduction="none",
+                                              label_smoothing=self.ce.label_smoothing).reshape(trend.shape).mean(1)
+            l_cls = (per * weight).sum() / weight.sum()
         return l_cls, {"ce": l_cls.item()}
 
 
@@ -159,7 +174,20 @@ def macro_f1_each(Y, P):
     return [M.trend_metrics(Y[:, j], P[:, j].argmax(-1))["macro_f1"] for j in range(Y.shape[1])]
 
 
-def train_one(name, seed, Xfit, Yfit, Rfit, Xes, Yes, Gfit=None, Ges=None, n_groups=0):
+def augment(xb, gen, ctx_rng):
+    """E28 / E06 training-time masking (inner hold-out and validation are never masked). Off by default."""
+    if OPT["chan_mask"] > 0:               # E28: hide each input of each window with probability chan_mask
+        keep = torch.rand(xb.shape[0], 1, xb.shape[2], device=xb.device, generator=gen) >= OPT["chan_mask"]
+        xb = xb * keep.to(xb.dtype)
+    if OPT["context_min"]:                 # E06: keep the most recent m days, m ~ U[context_min, lookback], per batch
+        m = int(ctx_rng.integers(OPT["context_min"], xb.shape[1] + 1))
+        if m < xb.shape[1]:
+            xb = xb.clone()
+            xb[:, : xb.shape[1] - m, :] = 0.0
+    return xb
+
+
+def train_one(name, seed, Xfit, Yfit, Rfit, Xes, Yes, Gfit=None, Ges=None, n_groups=0, Wfit=None):
     torch.manual_seed(seed); np.random.seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
@@ -167,6 +195,8 @@ def train_one(name, seed, Xfit, Yfit, Rfit, Xes, Yes, Gfit=None, Ges=None, n_gro
     loss_fn = make_loss().to(DEVICE)
     opt = torch.optim.AdamW(list(model.parameters()) + list(loss_fn.parameters()), lr=SET["lr"], weight_decay=SET["weight_decay"])
     rng = np.random.default_rng(seed)
+    gen = torch.Generator(device=DEVICE).manual_seed(seed)          # E28 masks (own stream)
+    ctx_rng = np.random.default_rng(seed + 1)                        # E06 context lengths (own stream)
     best, best_state, best_ep, bad, hist = -1.0, None, 0, 0, []
     nh = Yes.shape[1]                       # E12: best epoch tracked per horizon too (does not change training)
     best_h, best_ep_h, state_h, bad_h = [-1.0] * nh, [0] * nh, [None] * nh, [0] * nh
@@ -175,8 +205,14 @@ def train_one(name, seed, Xfit, Yfit, Rfit, Xes, Yes, Gfit=None, Ges=None, n_gro
         order = rng.permutation(len(Xfit)); tot = 0.0
         for i in range(0, len(order), SET["batch_size"]):
             b = order[i:i + SET["batch_size"]]
-            out = _call(model, _t(Xfit[b]), None if Gfit is None else _t(Gfit[b]))
-            loss, _ = loss_fn(out, _t(Yfit[b]), _t(Rfit[b]))
+            xb = _t(Xfit[b])
+            if OPT["chan_mask"] > 0 or OPT["context_min"]:
+                xb = augment(xb, gen, ctx_rng)
+            out = _call(model, xb, None if Gfit is None else _t(Gfit[b]))
+            if Wfit is None:
+                loss, _ = loss_fn(out, _t(Yfit[b]), _t(Rfit[b]))
+            else:
+                loss, _ = loss_fn(out, _t(Yfit[b]), _t(Rfit[b]), _t(Wfit[b]))
             opt.zero_grad(); loss.backward(); nn.utils.clip_grad_norm_(model.parameters(), 1.0); opt.step()
             tot += loss.item() * len(b)
         es_each = macro_f1_each(Yes, predict(model, Xes, Ges)[0])
@@ -225,6 +261,13 @@ def main(argv=None):
     ap.add_argument("--lookback", type=int, default=LOOKBACK, help="E14: look-back window in trading days (default 60)")
     ap.add_argument("--revin-stats", action="store_true",
                     help="E23: keep RevIN and feed each input's window mean and log-std to the heads (needs RevIN on)")
+    ap.add_argument("--patches", default=None, help='E07/E08/E09/E15: patch scales "len,step;len,step" (default "5,5;20,10")')
+    ap.add_argument("--d-channel", type=int, default=64, help="E17: values per input after the patch branches (default 64)")
+    ap.add_argument("--trunk-width", type=int, default=None, help="E17: width of the layer after the cross-channel vector")
+    ap.add_argument("--chan-mask", type=float, default=0.0, help="E28: hide each input of a training window with this probability")
+    ap.add_argument("--context-min", type=int, default=0, help="E06: keep only the last m days of each training batch, m ~ U[this, lookback]")
+    ap.add_argument("--recent-weight", type=float, default=1.0, help="E13: loss weight of training rows before --recent-from")
+    ap.add_argument("--recent-from", default="2022-01-01", help="E13: first date with full weight")
     ap.add_argument("--importance", type=int, default=0, metavar="REPEATS",
                     help="feature-importance diagnostic: permutation importance on validation with REPEATS shuffles "
                          "(per-horizon best states); does not change training or scores")
@@ -232,8 +275,14 @@ def main(argv=None):
     LOOKBACK = args.lookback
     if args.revin_stats and args.no_revin:
         ap.error("--revin-stats re-injects what RevIN removes; it cannot be combined with --no-revin")
+    if args.recent_weight != 1.0 and not args.cls_only:
+        ap.error("--recent-weight is implemented for --cls-only training only")
+    if args.context_min and not (0 < args.context_min <= LOOKBACK):
+        ap.error("--context-min must be between 1 and the look-back")
+    patches = None if args.patches is None else tuple(tuple(int(v) for v in p.split(",")) for p in args.patches.split(";"))
     OPT.update(revin=not args.no_revin, cls_only=args.cls_only, label_smoothing=args.label_smoothing, stop_rule=args.stop_rule,
-               revin_stats=args.revin_stats)
+               revin_stats=args.revin_stats, patches=patches, d_channel=args.d_channel, trunk_width=args.trunk_width,
+               chan_mask=args.chan_mask, context_min=args.context_min, recent_weight=args.recent_weight, recent_from=args.recent_from)
     SET.update(max_epochs=args.max_epochs, lr=args.lr, dropout=args.dropout, patience=args.patience)
     print("settings: " + ", ".join(f"{k}={SET[k]}" for k in ("lr", "dropout", "max_epochs", "patience")) + f", options={OPT}", flush=True)
     if args.threads:
@@ -264,6 +313,10 @@ def main(argv=None):
     sec_id = {s: i + 1 for i, s in enumerate(sorted(sectors.sector.unique()))}       # 0 = unknown
     sym2g = dict(zip(sectors.symbol, sectors.sector.map(sec_id)))
     G = {k: d.symbol.map(sym2g).fillna(0).to_numpy(np.int64) for k, d in (("fit", fit), ("es", es), ("val", va))}
+    Wfit = None
+    if OPT["recent_weight"] != 1.0:                                  # E13: down-weight older training rows
+        Wfit = np.where(fit.date < pd.Timestamp(OPT["recent_from"]), OPT["recent_weight"], 1.0).astype(np.float32)
+        print(f"E13 weights: {int((Wfit < 1).sum())} fit rows before {OPT['recent_from']} at {OPT['recent_weight']}", flush=True)
     print(f"rows: fit {len(fit)} / inner-ES {len(es)} / val {len(va)}; window {LOOKBACK} x {len(channels)}", flush=True)
 
     floors = {}
@@ -297,7 +350,7 @@ def main(argv=None):
         runs = []
         for seed in args.seeds:
             t0 = time.time()
-            model, meta, state_h = train_one(name, seed, X["fit"], Y["fit"], Rfit, X["es"], Y["es"], G["fit"], G["es"], len(sec_id))
+            model, meta, state_h = train_one(name, seed, X["fit"], Y["fit"], Rfit, X["es"], Y["es"], G["fit"], G["es"], len(sec_id), Wfit)
             P, R = predict(model, X["val"], G["val"])
             per_h = {}
             for j, h in enumerate(L.HORIZONS):

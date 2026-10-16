@@ -17,6 +17,8 @@ Design (proof-of-life version, 2026-10-06; choices recorded in the project log, 
     mean and log-std that RevIN removes are concatenated to the cross-channel vector, so the heads see the
     level as well as the shape. Simplified from the de-stationary idea of Non-stationary Transformers
     (Liu, Wu, Wang & Long, NeurIPS 2022). Statistics come from the window itself only, like RevIN.
+  * Optional trunk width (experiment ledger E17, 2026-10-16): by default the layer after the cross-channel vector has
+    2 x d_channel outputs; trunk_width fixes it, so d_channel (values per input) can shrink alone.
   * Optional group label (Phase 1.13 decision, 2026-10-15): a learned SET-sector embedding is concatenated
     to the cross-channel vector before the heads. Index 0 = unknown sector. Off by default (n_groups=0).
 Positional encoding is a learnable absolute embedding per branch here; MTST uses relative encoding.
@@ -73,7 +75,7 @@ class MultiScalePatchTST(nn.Module):
     def __init__(self, n_channels: int, lookback: int = 60, patches=((5, 5), (20, 10)), horizons=(1, 5, 10),
                  n_classes: int = 3, d_model: int = 64, n_heads: int = 4, n_layers: int = 2, d_ff: int = 128,
                  d_channel: int = 64, dropout: float = 0.1, revin: bool = True, n_groups: int = 0, d_group: int = 16,
-                 revin_stats: bool = False):
+                 revin_stats: bool = False, trunk_width: int | None = None):
         super().__init__()
         self.n_channels, self.lookback, self.horizons = n_channels, lookback, tuple(horizons)
         self.revin = RevIN(n_channels) if revin else None
@@ -86,9 +88,10 @@ class MultiScalePatchTST(nn.Module):
         g = d_group if n_groups else 0
         self.revin_stats = revin_stats                          # E23: 2 values per channel (window mean, log std)
         s = 2 * n_channels if revin_stats else 0
-        self.trunk = nn.Sequential(nn.Linear(n_channels * d_channel + g + s, d_channel * 2), nn.GELU(), nn.Dropout(dropout))
-        self.trend_head = nn.Linear(d_channel * 2, h * n_classes)
-        self.return_head = nn.Linear(d_channel * 2, h)
+        w = trunk_width or d_channel * 2                        # E17: keep the trunk width when d_channel shrinks
+        self.trunk = nn.Sequential(nn.Linear(n_channels * d_channel + g + s, w), nn.GELU(), nn.Dropout(dropout))
+        self.trend_head = nn.Linear(w, h * n_classes)
+        self.return_head = nn.Linear(w, h)
         self.n_classes = n_classes
 
     def forward(self, x: torch.Tensor, group: torch.Tensor | None = None) -> dict:   # x: [B, L, C], window ending at day t
