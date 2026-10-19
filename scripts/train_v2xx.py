@@ -83,8 +83,8 @@ def _t(a):
     return torch.from_numpy(np.ascontiguousarray(a)).to(DEVICE)
 
 
-def predict(model, X, S, G, bs=2048):
-    """Eval mode: dropout off and BatchNorm uses its stored training statistics, so a row's prediction never
+def predict(model, X, S, G, bs: int):
+    """bs = the training batch size, so prediction never needs more GPU memory than a training step. Eval mode: dropout off and BatchNorm uses its stored training statistics, so a row's prediction never
     depends on the other rows of its batch."""
     model.eval()
     P, R, W = [], [], []
@@ -182,7 +182,7 @@ def train_one(cfg, seed, D, n_channels, n_stocks, n_sectors, max_epochs):
             for k, v in parts.items():
                 parts_sum[k] = parts_sum.get(k, 0.0) + v * len(b)
         e = D["es"]
-        P, R, _ = predict(model, e["X"], e["S"], e["G"])
+        P, R, _ = predict(model, e["X"], e["S"], e["G"], tr["batch_size"])
         es_each = macro_f1_each(e["Y"], P)
         es = float(np.mean(es_each))
         es_rmse = [float(np.sqrt(np.mean((R[:, j] - e["R"][:, j]) ** 2))) for j in range(nh)]   # standardised units
@@ -302,7 +302,7 @@ def main(argv=None):
         for j, h in enumerate(L.HORIZONS):
             sid = id(states[j])
             if sid not in cache:
-                model.load_state_dict(states[j]); cache[sid] = predict(model, D["val"]["X"], D["val"]["S"], D["val"]["G"])
+                model.load_state_dict(states[j]); cache[sid] = predict(model, D["val"]["X"], D["val"]["S"], D["val"]["G"], cfg["training"]["batch_size"])
             P, R, W = cache[sid]
             yhat = P[:, j].argmax(-1)
             rp = R[:, j] * r_sd[j]
@@ -345,4 +345,7 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except torch.cuda.OutOfMemoryError as e:                                 # anywhere, incl. prediction
+        raise SystemExit(f"{OOM_HELP}\n({e})")
