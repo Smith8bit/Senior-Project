@@ -149,7 +149,13 @@ def build_data(cfg: dict, news_path: Path, fold: dict | None = None, smoke: bool
             "has_news": has_news, "fit_end": fit_end, "es_start": es_start}
 
 
-def train_one(cfg, seed, D, n_channels, n_stocks, n_sectors, max_epochs):
+def _cpu_state(st):
+    return {k: v.detach().cpu().clone() for k, v in st.items()}
+
+
+def train_one(cfg, seed, D, n_channels, n_stocks, n_sectors, max_epochs, save_path: Path | None = None):
+    """Train one seed. Every time the kept checkpoint improves, it is written at once to save_path (on Drive in
+    Colab), so a disconnect never loses the best epoch so far; the printout marks that epoch."""
     tr = cfg["training"]
     torch.manual_seed(seed); np.random.seed(seed)
     if torch.cuda.is_available():
@@ -186,26 +192,47 @@ def train_one(cfg, seed, D, n_channels, n_stocks, n_sectors, max_epochs):
         es_each = macro_f1_each(e["Y"], P)
         es = float(np.mean(es_each))
         es_rmse = [float(np.sqrt(np.mean((R[:, j] - e["R"][:, j]) ** 2))) for j in range(nh)]   # standardised units
-        for j in STOP.update_per_horizon(best_h, bad_h, es_each):
+        improved = STOP.update_per_horizon(best_h, bad_h, es_each)
+        for j in improved:
             best_ep_h[j] = ep
             state_h[j] = {k: v.detach().clone() for k, v in model.state_dict().items()}
-        row = {"epoch": ep, "train_loss": round(tot / len(f["X"]), 5),
-               **{f"train_{k}": round(v / len(f["X"]), 5) for k, v in parts_sum.items()},
-               "es_macro_f1": round(es, 4), "es_per_horizon": [round(s, 4) for s in es_each],
-               "es_return_rmse_std": [round(s, 4) for s in es_rmse], "sec": round(time.time() - t0, 1)}
-        if torch.cuda.is_available():
-            row["gpu_peak_gb"] = round(torch.cuda.max_memory_allocated() / 2 ** 30, 2)
-        hist.append(row)
-        print(f"    seed {seed} ep {ep}: loss {tot / len(f['X']):.4f}  inner-ES macro-F1 {es:.4f} "
-              f"{[round(s, 3) for s in es_each]}  ({time.time() - t0:.0f}s"
-              + (f", GPU peak {row['gpu_peak_gb']} GB" if "gpu_peak_gb" in row else "") + ")", flush=True)
-        if es > best:
+        new_best = es > best                                         # best 3-horizon mean so far
+        if new_best:
             best, best_ep, bad = es, ep, 0
             best_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
         else:
             bad += 1
+        shared = tr["checkpoint"] == "shared"
+        kept_changed = new_best if shared else bool(improved)          # did the weights we would keep change?
+        if save_path is not None and kept_changed:
+            torch.save({"seed": seed, "saved_at_epoch": ep, "checkpoint": tr["checkpoint"], "config": cfg,
+                        "best_epoch": best_ep, "best_inner_es_macro_f1": best,
+                        "best_epoch_per_horizon": best_ep_h, "best_inner_es_per_horizon": best_h,
+                        "states": [_cpu_state(best_state)] if shared else [_cpu_state(x) for x in state_h]}, save_path)
+        row = {"epoch": ep, "train_loss": round(tot / len(f["X"]), 5),
+               **{f"train_{k}": round(v / len(f["X"]), 5) for k, v in parts_sum.items()},
+               "es_macro_f1": round(es, 4), "es_per_horizon": [round(s, 4) for s in es_each],
+               "es_return_rmse_std": [round(s, 4) for s in es_rmse], "new_best_mean": new_best,
+               "improved_horizons": [L.HORIZONS[j] for j in improved], "stall_per_horizon": list(bad_h),
+               "sec": round(time.time() - t0, 1)}
+        if torch.cuda.is_available():
+            row["gpu_peak_gb"] = round(torch.cuda.max_memory_allocated() / 2 ** 30, 2)
+        hist.append(row)
+        per_h = " ".join(f"{h}d {sc:.3f}{'*' if j in improved else ' '}" for j, (h, sc) in enumerate(zip(L.HORIZONS, es_each)))
+        mark = (f"  <== BEST epoch {ep} (mean {es:.4f}){' - saved' if save_path is not None else ''}" if new_best
+                else f"      best still epoch {best_ep} ({best:.4f})")
+        print(f"    seed {seed} ep {ep:>2}: loss {tot / len(f['X']):.4f} | inner-ES mean {es:.4f} [{per_h}] "
+              f"| stall {'/'.join(map(str, bad_h))} of {tr['patience']}{mark}  ({time.time() - t0:.0f}s"
+              + (f", GPU peak {row['gpu_peak_gb']} GB" if "gpu_peak_gb" in row else "") + ")", flush=True)
         if STOP.should_stop(tr["stop_rule"], bad, bad_h, tr["patience"]):
+            print(f"    seed {seed}: stopped after epoch {ep} - "
+                  + ("every horizon" if tr["stop_rule"] == "every" else "the 3-horizon mean")
+                  + f" went {tr['patience']} epochs without improving; weights kept from epoch {best_ep}"
+                  + ("" if shared else f" (per horizon: {best_ep_h})"), flush=True)
             break
+    else:
+        print(f"    seed {seed}: reached max_epochs {max_epochs}; weights kept from epoch {best_ep}"
+              + ("" if tr["checkpoint"] == "shared" else f" (per horizon: {best_ep_h})"), flush=True)
     meta = {"best_epoch": best_ep, "best_inner_es_macro_f1": round(best, 4), "epochs_run": len(hist), "history": hist,
             "best_epoch_per_horizon": best_ep_h, "best_inner_es_per_horizon": [round(b, 4) for b in best_h]}
     if cfg["loss"]["weighting"] == "kendall":
@@ -292,7 +319,8 @@ def main(argv=None):
     for seed in seeds:
         t0 = time.time()
         try:
-            model, meta, states, epochs_used = train_one(cfg, seed, D, len(channels), len(stock_vocab), len(sec_id), max_epochs)
+            model, meta, states, epochs_used = train_one(cfg, seed, D, len(channels), len(stock_vocab), len(sec_id), max_epochs,
+                                                       save_path=wdir / f"seed{seed}_best_so_far.pt")
         except torch.cuda.OutOfMemoryError as e:                             # clear stop instead of a long traceback
             raise SystemExit(f"{OOM_HELP}\n(seed {seed}; {e})")
         torch.save({"config": cfg, "stock_vocab": stock_vocab, "sector_ids": sec_id, "r_sd": r_sd.tolist(),
