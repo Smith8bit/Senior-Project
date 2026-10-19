@@ -54,7 +54,7 @@
   },
   "protocol": {
     "horizons": [1, 5, 10],
-    "seeds": [20261015, 20261016, 20261017],
+    "seeds": [4539913, 9574315, 2253758],
     "inner_es_share": 0.10,
     "purge": 10,
     "split": "official 70/15/15 by date (validation only; test sealed)",
@@ -62,6 +62,7 @@
     "early_stopping_metric": "inner hold-out macro-F1 per horizon"
   },
   "_notes": {
+    "seeds": "4539913 / 9574315 / 2253758, chosen by Siwat 2026-10-20, replacing 20261015 / 16 / 17 used by E00-E31 and v2 (so runs are no longer paired seed-for-seed with those).",
     "inputs, loss, training": "Copied from configs/v2_01.json (Siwat's choices) so only the architecture differs. Change them here if the baseline should differ.",
     "paper and code reference values (not decisions)": "L 336 or 512, P 16, S 8, 3 layers, 16 heads, d_model 128, d_ff 256, dropout 0.2 (paper; small datasets: 4 heads, d_model 16, d_ff 128); official code: attn_dropout 0, head_dropout 0.",
     "fixed": "channel independence, RevIN, end padding (N = floor((L-P)/S) + 2), BatchNorm post-norm encoder with GELU, last-patch flatten + linear heads: Nie et al. 2023 and the official code."
