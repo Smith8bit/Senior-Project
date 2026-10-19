@@ -1,0 +1,145 @@
+{
+  "name": "main_model_v2",
+  "saved": "2026-10-17",
+  "status": "best configuration found; not a pass, not confirmed (validation only; test sealed)",
+  "selected_by": "batch 7 rules fixed before batches 4-7 ran (claude/batches-4-7-design-2026-10-16.md)",
+  "code_commit": "6eaa76f",
+  "deep_script_sha256": "143abf7f5135ea83a4290b67247b4ee19f2900858d74796d2e4ea19cca6cdbe4",
+  "deep_model": {
+    "experiment": "E07 (on parent E21)",
+    "model": "multiscale_sector",
+    "params": 667900,
+    "args": [
+      "--models",
+      "multiscale_sector",
+      "--news",
+      "data/derived/sentiment_scores.csv",
+      "--extra-features",
+      "e03",
+      "--lr",
+      "1e-4",
+      "--dropout",
+      "0.2",
+      "--max-epochs",
+      "30",
+      "--patience",
+      "10",
+      "--cls-only",
+      "--stop-rule",
+      "every",
+      "--no-revin",
+      "--patches",
+      "2,1;20,10"
+    ],
+    "seeds": [
+      20261015,
+      20261016,
+      20261017
+    ],
+    "scoring": "each horizon at its own best inner hold-out epoch (prefix multiscale_sector_ph in the predictions file)",
+    "run_file": "Senior/results/batch6/e07_short_2_1.json"
+  },
+  "output_rule": {
+    "h1": {
+      "blend": "0.5 * deep + 0.5 * lgbm (E29, scripts/factors_tabular.py, 343 inputs), seed s with seed s",
+      "bias_log_prob": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "h5": {
+      "blend": "0.5 * deep + 0.5 * xgb (scripts/baselines_tabular.py --extra-features e03), seed s with seed s",
+      "bias_log_prob": [
+        0.0,
+        -0.05,
+        0.05
+      ],
+      "bias_fitted_on": "the 4 walk-forward windows only (2022H2, 2023H1, 2023H2, 2024H1)"
+    },
+    "h10": {
+      "blend": null,
+      "bias_log_prob": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "class_order": [
+      "down",
+      "flat",
+      "up"
+    ],
+    "decision": "argmax(log p + bias)"
+  },
+  "scores_macro_f1": {
+    "official_validation": {
+      "h1": [
+        0.3871,
+        0.0038
+      ],
+      "h5": [
+        0.3963,
+        0.0021
+      ],
+      "h10": [
+        0.3775,
+        0.0069
+      ]
+    },
+    "official_ci95_date_blocks": {
+      "h1": [
+        0.3722,
+        0.3979
+      ],
+      "h5": [
+        0.3729,
+        0.4164
+      ],
+      "h10": [
+        0.3415,
+        0.4089
+      ]
+    },
+    "walk_forward_mean": {
+      "h1": 0.3666,
+      "h5": 0.366,
+      "h10": 0.3701
+    },
+    "walk_forward_windows": {
+      "h1": {
+        "2022H2": 0.3441,
+        "2023H1": 0.3798,
+        "2023H2": 0.3686,
+        "2024H1": 0.3739
+      },
+      "h5": {
+        "2022H2": 0.3546,
+        "2023H1": 0.3718,
+        "2023H2": 0.3621,
+        "2024H1": 0.3754
+      },
+      "h10": {
+        "2022H2": 0.3624,
+        "2023H1": 0.3576,
+        "2023H2": 0.3782,
+        "2024H1": 0.3822
+      }
+    },
+    "windows_passing_per_window_bar": {
+      "h1": 0,
+      "h5": 0,
+      "h10": 2
+    },
+    "pass_bar": {
+      "h1": 0.393,
+      "h5": 0.4,
+      "h10": 0.407
+    }
+  },
+  "reproduce": "Colab: notebooks/colab_batch7.ipynb (decisions in scripts/select_final.py; output rule and scores in scripts/posthoc_eval.py final)",
+  "docs": [
+    "claude/main-model-v2-2026-10-17.md",
+    "claude/log-entry-2026-10-17-batches-4-7-results.md"
+  ]
+}

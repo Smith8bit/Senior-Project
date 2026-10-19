@@ -1,0 +1,69 @@
+{
+  "name": "baseline_patchtst",
+  "description": "Faithful PatchTST baseline for proposal objective 2 ('PatchTST ต้นฉบับ'): Nie et al. (2023) and the official code, adapted only where the task requires (two heads; no RevIN de-normalisation). Same inputs, rows, labels, split, loss and training protocol as v2.01, so the comparison isolates the architecture. The model numbers are blank for Siwat.",
+  "inputs": {
+    "price_channels": ["open", "high", "low", "close", "volume"],
+    "ohlc_return_base": "previous_close",
+    "indicators": ["sma", "ema", "rsi", "macd", "bb_pctb", "adx"],
+    "sma_periods": [9, 21, 200],
+    "ema_periods": [9, 21, 200],
+    "rsi_period": 14,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "bb_period": 20,
+    "bb_width_k": 2.0,
+    "adx_period": 14,
+    "sentiment": ["p_pos", "p_neg", "p_neu"],
+    "sentiment_no_news": "uniform"
+  },
+  "model": {
+    "family": "patchtst_faithful",
+    "channel_mode": "independent",
+    "revin": true,
+    "padding": "end",
+    "encoder_norm": "batchnorm",
+    "head": "last_patch_flatten_linear",
+    "lookback": null,
+    "patch_len": null,
+    "stride": null,
+    "d_model": null,
+    "n_heads": null,
+    "n_layers": null,
+    "d_ff": null,
+    "dropout": null,
+    "attn_dropout": null,
+    "head_dropout": null
+  },
+  "loss": {
+    "price_target": "log_return",
+    "weighting": "fixed",
+    "w_trend": 1.0,
+    "w_price": 1.0,
+    "price_loss": "mse",
+    "huber_delta": null
+  },
+  "training": {
+    "lr": 0.0001,
+    "weight_decay": 0.01,
+    "batch_size": 256,
+    "max_epochs": 50,
+    "patience": 5,
+    "grad_clip": 0,
+    "stop_rule": "every",
+    "checkpoint": "shared"
+  },
+  "protocol": {
+    "horizons": [1, 5, 10],
+    "seeds": [20261015, 20261016, 20261017],
+    "inner_es_share": 0.10,
+    "purge": 10,
+    "split": "official 70/15/15 by date (validation only; test sealed)",
+    "labels": "k x sigma_h fitted on training rows",
+    "early_stopping_metric": "inner hold-out macro-F1 per horizon"
+  },
+  "_notes": {
+    "inputs, loss, training": "Copied from configs/v2_01.json (Siwat's choices) so only the architecture differs. Change them here if the baseline should differ.",
+    "paper and code reference values (not decisions)": "L 336 or 512, P 16, S 8, 3 layers, 16 heads, d_model 128, d_ff 256, dropout 0.2 (paper; small datasets: 4 heads, d_model 16, d_ff 128); official code: attn_dropout 0, head_dropout 0.",
+    "fixed": "channel independence, RevIN, end padding (N = floor((L-P)/S) + 2), BatchNorm post-norm encoder with GELU, last-patch flatten + linear heads: Nie et al. 2023 and the official code."
+  }
+}

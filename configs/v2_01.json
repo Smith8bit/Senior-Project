@@ -1,0 +1,83 @@
+{
+  "name": "v2.01",
+  "description": "Proposal-accurate Multi-Scale PatchTST: the committee-slide architecture (slides 9-14, 19) with every number chosen by Siwat on 2026-10-19. Nothing from Phase 4 tuning carried over.",
+  "decided": "Siwat, 2026-10-19 (Q&A in the v3 rework session); written 2026-10-20",
+  "inputs": {
+    "price_channels": ["open", "high", "low", "close", "volume"],
+    "ohlc_return_base": "previous_close",
+    "indicators": ["sma", "ema", "rsi", "macd", "bb_pctb", "adx"],
+    "sma_periods": [9, 21, 200],
+    "ema_periods": [9, 21, 200],
+    "rsi_period": 14,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "bb_period": 20,
+    "bb_width_k": 2.0,
+    "adx_period": 14,
+    "sentiment": ["p_pos", "p_neg", "p_neu"],
+    "sentiment_no_news": "uniform",
+    "stock_identity": ["stock_id", "sector_id"]
+  },
+  "model": {
+    "family": "proposal_msp",
+    "lookback": 126,
+    "patch_lengths": [1, 5, 21],
+    "patch_strides": [1, 5, 21],
+    "channel_mode": "independent",
+    "revin": true,
+    "encoder_norm": "batchnorm",
+    "d_model": 128,
+    "n_heads": 16,
+    "n_layers": 3,
+    "d_ff": 256,
+    "dropout": 0.2,
+    "pooling": "mean",
+    "scale_fusion": "attention",
+    "fusion_hidden": 128,
+    "d_stock": 32,
+    "d_sector": 18,
+    "stock_id_dropout": 0.1,
+    "trunk_width": 128,
+    "head_hidden": [128, 64],
+    "head_dropout": 0.2
+  },
+  "loss": {
+    "price_target": "log_return",
+    "weighting": "fixed",
+    "w_trend": 1.0,
+    "w_price": 1.0,
+    "price_loss": "mse",
+    "huber_delta": null
+  },
+  "training": {
+    "lr": 0.0001,
+    "weight_decay": 0.01,
+    "batch_size": 256,
+    "max_epochs": 50,
+    "patience": 5,
+    "grad_clip": 0,
+    "stop_rule": "every",
+    "checkpoint": "shared"
+  },
+  "protocol": {
+    "horizons": [1, 5, 10],
+    "seeds": [20261015, 20261016, 20261017],
+    "inner_es_share": 0.10,
+    "purge": 10,
+    "split": "official 70/15/15 by date (validation only; test sealed)",
+    "labels": "k x sigma_h fitted on training rows (k = 0.307 / 0.318 / 0.324 on the official split)",
+    "early_stopping_metric": "inner hold-out macro-F1 per horizon"
+  },
+  "run": {
+    "gpu": "A100 (Siwat, 2026-10-19: batch 256 with these sizes is estimated at 25-60 GB)",
+    "walk_forward": false
+  },
+  "_notes": {
+    "fixed": "price_channels, sentiment, stock_identity: slide 9. indicators: proposal scope 2. pooling mean, scale_fusion attention: slides 11 and 19. trunk_width 128 and head_hidden 128/64: slides 12-13. price_target log_return: slide 9 and hard rule 1. horizons 1/5/10: proposal scope 4. protocol: earlier pre-registered decisions.",
+    "patches": "1 / 5 / 21 = day / week / month candles, stride = length (no overlap). The slide's 4 / 8 / 16 were placeholders (Siwat, 2026-10-19). Look-back 126 = 6 x 21: tokens 126 / 25 / 6; the week scale skips the oldest day.",
+    "sma_ema_200": "Computed from each stock's full past history, not the 126-day window; about 2.4% of sample rows are filled with the training mean.",
+    "encoder_norm": "batchnorm = PatchTST's own encoder layer (post-norm, GELU, attention dropout 0), src/encoders.py.",
+    "stock_id_dropout": "probability that a training row's stock_id is replaced by 'unknown' (0); stocks with no training rows always use 'unknown'.",
+    "grad_clip": "0 = no clipping"
+  }
+}
