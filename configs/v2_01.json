@@ -56,7 +56,7 @@
     "max_epochs": 50,
     "patience": 5,
     "grad_clip": 0,
-    "stop_rule": "every",
+    "stop_rule": "mean",
     "checkpoint": "shared"
   },
   "protocol": {
@@ -69,10 +69,11 @@
     "early_stopping_metric": "inner hold-out macro-F1 per horizon"
   },
   "run": {
-    "gpu": "A100 (Siwat, 2026-10-19: batch 256 with these sizes is estimated at 25-60 GB)",
+    "gpu": "A100 or L4 (Siwat, 2026-10-20). Measured peak 15.9 GB at batch 256 on the A100 run of 2026-10-20; results are kept in a folder per GPU because GPU arithmetic differs.",
     "walk_forward": false
   },
   "_notes": {
+    "stop_rule": "mean = stop when the 3-horizon mean on the inner hold-out (the score that picks the kept weights) has not improved for patience epochs. Changed from every by Siwat 2026-10-20 04:08 after the first full run kept training past best epoch 17 + 5.",
     "seeds": "4539913 / 9574315 / 2253758, chosen by Siwat 2026-10-20, replacing 20261015 / 16 / 17 used by E00-E31 and v2 (so runs are no longer paired seed-for-seed with those).",
     "fixed": "price_channels, sentiment, stock_identity: slide 9. indicators: proposal scope 2. pooling mean, scale_fusion attention: slides 11 and 19. trunk_width 128 and head_hidden 128/64: slides 12-13. price_target log_return: slide 9 and hard rule 1. horizons 1/5/10: proposal scope 4. protocol: earlier pre-registered decisions.",
     "patches": "1 / 5 / 21 = day / week / month candles, stride = length (no overlap). The slide's 4 / 8 / 16 were placeholders (Siwat, 2026-10-19). Look-back 126 = 6 x 21: tokens 126 / 25 / 6; the week scale skips the oldest day.",
