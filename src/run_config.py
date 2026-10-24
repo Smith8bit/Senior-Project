@@ -15,6 +15,7 @@ from pathlib import Path
 
 POS_INT, POS_NUM, NONNEG_NUM, PROB, BOOL = "positive integer", "positive number", "number >= 0", "number in [0, 1)", "true or false"
 INT_LIST = "non-empty list of distinct positive integers"
+OPEN01 = "number strictly between 0 and 1"
 FAMILIES = ("proposal_msp", "patchtst_faithful")
 
 # (section, key): (accepts, required_when) ; required_when = None -> always required
@@ -45,10 +46,18 @@ COMMON = {
     ("training", "weight_decay"): (NONNEG_NUM, None),
     ("training", "batch_size"): (POS_INT, None),
     ("training", "max_epochs"): (POS_INT, None),
-    ("training", "patience"): (POS_INT, None),
     ("training", "grad_clip"): ("positive number, or 0 for none", None),
-    ("training", "stop_rule"): (("mean", "every"), None),
     ("training", "checkpoint"): (("shared", "per_horizon"), None),
+    # v2.02 options (Siwat, 2026-10-25); configs/v2_01.json states the v2.01 behaviour explicitly
+    ("training", "early_stopping"): (BOOL, None),
+    ("training", "stop_rule"): (("mean", "every"), ("early_stopping", True)),
+    ("training", "patience"): (POS_INT, ("early_stopping", True)),
+    ("training", "selection"): (("f1_mean", "f1_up_to_ce_min"), None),
+    ("training", "lr_schedule"): (("constant", "cosine"), None),
+    ("training", "lr_min"): (NONNEG_NUM, ("lr_schedule", "cosine")),
+    ("training", "weight_averaging"): (("none", "ema"), None),
+    ("training", "ema_decay"): (OPEN01, ("weight_averaging", "ema")),
+    ("report", "seed_ensemble"): (BOOL, None),
 }
 
 SCHEMA = {
@@ -109,6 +118,8 @@ def _ok(accepts, v) -> bool:
         return isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= v < 1
     if accepts == BOOL:
         return isinstance(v, bool)
+    if accepts == OPEN01:
+        return isinstance(v, (int, float)) and not isinstance(v, bool) and 0 < v < 1
     if accepts == INT_LIST:
         return (isinstance(v, list) and len(v) > 0 and len(set(v)) == len(v)
                 and all(isinstance(n, int) and not isinstance(n, bool) and n > 0 for n in v))
@@ -161,6 +172,17 @@ def problems(cfg: dict) -> list[str]:
     gc = cfg.get("training", {}).get("grad_clip")
     if gc is not None and not (isinstance(gc, (int, float)) and not isinstance(gc, bool) and gc >= 0):
         out.append("training.grad_clip must be a number >= 0 (0 = no clipping)")
+    t = cfg.get("training", {})
+    if t.get("selection") == "f1_up_to_ce_min":
+        if t.get("checkpoint") not in (None, "shared"):
+            out.append("training.selection f1_up_to_ce_min works with checkpoint shared only")
+        if t.get("early_stopping") is True:
+            out.append("training.selection f1_up_to_ce_min is used without early stopping (training.early_stopping false)")
+    if t.get("lr_schedule") == "cosine" and t.get("early_stopping") is True:
+        out.append("training.lr_schedule cosine runs the full schedule, so training.early_stopping must be false")
+    if (t.get("lr_schedule") == "cosine" and isinstance(t.get("lr_min"), (int, float)) and isinstance(t.get("lr"), (int, float))
+            and t["lr_min"] >= t["lr"]):
+        out.append("training.lr_min must be smaller than training.lr")
     p = cfg.get("protocol", {})
     if len(p.get("seeds") or []) < 3:
         out.append("protocol.seeds: at least 3 seeds (hard rule 5)")

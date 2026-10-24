@@ -80,6 +80,23 @@ def test_config():
           and s["inputs"]["sma_periods"] == [9, 21, 200] and s["model"]["encoder_norm"] == "batchnorm"
           and s["inputs"]["sentiment_no_news"] == "uniform" and s["training"]["grad_clip"] == 0,
           "shipped v2_01.json holds Siwat's 2026-10-19 choices (spot check)")
+    v2 = json.loads((ROOT / "configs/v2_02.json").read_text(encoding="utf-8"))
+    t = v2["training"]
+    check(RC.problems(v2) == [] and v2["model"]["patch_lengths"] == [2, 5, 21] and v2["model"]["patch_strides"] == [2, 5, 21]
+          and v2["inputs"]["sma_periods"] == [9, 21, 60] and v2["inputs"]["ema_periods"] == [9, 21, 60] and t["batch_size"] == 128
+          and t["lr_schedule"] == "cosine" and t["lr_min"] == 0 and t["max_epochs"] == 30 and t["early_stopping"] is False
+          and t["selection"] == "f1_up_to_ce_min" and t["weight_averaging"] == "ema" and t["ema_decay"] == 0.99
+          and v2["report"]["seed_ensemble"] is True and v2["protocol"]["inner_es_share"] == 0.10 and v2["protocol"]["purge"] == 10,
+          "shipped configs/v2_02.json is complete and holds Siwat's 2026-10-25 choices")
+    c = copy.deepcopy(v2); c["training"]["early_stopping"] = True; c["training"].update(stop_rule="mean", patience=5)
+    check(any("cosine" in b for b in RC.problems(c)) and any("f1_up_to_ce_min" in b for b in RC.problems(c)),
+          "cosine or CE-gated selection with early stopping is refused")
+    c = copy.deepcopy(v2); c["training"]["ema_decay"] = 1.0
+    check(any("ema_decay" in b for b in RC.problems(c)), "EMA decay must be strictly between 0 and 1")
+    c = copy.deepcopy(v2); c["training"]["lr_min"] = 0.001
+    check(any("lr_min" in b for b in RC.problems(c)), "lr_min must be below lr")
+    c = copy.deepcopy(SHIPPED); c["training"].pop("patience")
+    check(any("patience" in b for b in RC.problems(c)), "with early stopping on, patience is still required")
     blank = copy.deepcopy(SHIPPED)
     for sec in ("inputs", "model", "loss", "training"):
         for k in list(blank[sec]):
@@ -174,6 +191,12 @@ def test_model():
           "v2.01 numbers: tokens 126 / 25 / 6; the week scale skips the oldest day")
     check(sum(p.numel() for p in m.parameters()) == expected_params(cfg, C=18, n_stocks=66, n_sectors=18),
           f"v2.01 numbers: weight count {sum(p.numel() for p in m.parameters()):,} equals the hand formula")
+    cfg2 = json.loads((ROOT / "configs/v2_02.json").read_text(encoding="utf-8"))
+    m2 = build(cfg2, n_channels=18, n_stocks=66, n_sectors=18)
+    n2 = sum(p.numel() for p in m2.parameters())
+    check([b.n_tokens for b in m2.branches] == [63, 25, 6] and [b.offset for b in m2.branches] == [0, 1, 0]
+          and n2 == expected_params(cfg2, C=18, n_stocks=66, n_sectors=18) == 1_579_239,
+          f"v2.02 numbers: tokens 63 / 25 / 6, weight count {n2:,} = hand formula = 1,579,239")
 
 
 def test_batchnorm_encoder():

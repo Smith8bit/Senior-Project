@@ -12,6 +12,8 @@
   build_dataset already holds in memory). Early stopping uses the inner hold-out, never the validation block.
 * Trend: macro-F1, accuracy, confusion grid. Price (proposal scope 5): RMSE / MAE / R2_OS of the log return, and RMSE /
   MAE of the implied closing price C_t * exp(r_hat) in baht, each beside its zero-return (persistence) floor.
+* v2.02 options: cosine learning rate, EMA weights (BatchNorm recomputed), selection "f1_up_to_ce_min", no early
+  stopping, per-epoch hold-out diagnostics (cross-entropy, call shares, call agreement), seed ensemble.
 * Saves the weights of every seed. On a GPU, reports the peak memory per epoch and stops with a clear message if
   memory runs out.
 """
@@ -42,6 +44,7 @@ import metrics as M  # noqa: E402
 import run_config as RC  # noqa: E402
 import sequences as SQ  # noqa: E402
 import stopping as STOP  # noqa: E402
+import train_utils as TU  # noqa: E402
 from patchtst_faithful import FaithfulPatchTST  # noqa: E402
 from proposal_model import ProposalMultiScalePatchTST, make_loss  # noqa: E402
 
@@ -154,8 +157,12 @@ def _cpu_state(st):
 
 
 def train_one(cfg, seed, D, n_channels, n_stocks, n_sectors, max_epochs, save_path: Path | None = None):
-    """Train one seed. Every time the kept checkpoint improves, it is written at once to save_path (on Drive in
-    Colab), so a disconnect never loses the best epoch so far; the printout marks that epoch."""
+    """Train one seed and return the kept weights.
+
+    v2.01 behaviour: constant lr, raw weights, kept epoch = best 3-horizon mean macro-F1, early stopping.
+    v2.02 options (config "training"): cosine lr per step; EMA weights (scored, kept and saved; BatchNorm statistics
+    recomputed on the fit rows before every hold-out evaluation); selection f1_up_to_ce_min; no early stopping.
+    Every time the kept weights change they are written at once to save_path (on Drive in Colab); the printout marks it."""
     tr = cfg["training"]
     torch.manual_seed(seed); np.random.seed(seed)
     if torch.cuda.is_available():
@@ -163,13 +170,25 @@ def train_one(cfg, seed, D, n_channels, n_stocks, n_sectors, max_epochs, save_pa
     model = build_model(cfg, n_channels, n_stocks, n_sectors).to(DEVICE)
     loss_fn = make_loss(cfg["loss"]).to(DEVICE)
     opt = torch.optim.AdamW(list(model.parameters()) + list(loss_fn.parameters()), lr=tr["lr"], weight_decay=tr["weight_decay"])
+    f = D["fit"]
+    spe = TU.steps_per_epoch(len(f["X"]), tr["batch_size"])
+    sched = TU.make_scheduler(opt, tr, spe, max_epochs)
+    ema = TU.EmaWeights(model, tr["ema_decay"]) if tr["weight_averaging"] == "ema" else None
     rng = np.random.default_rng(seed)
     drop_rng = np.random.default_rng(seed + 2)                      # stock_id dropout (own stream)
     p_drop = cfg["model"].get("stock_id_dropout", 0.0)
     nh = D["es"]["Y"].shape[1]
-    best, best_state, best_ep, bad, hist = -1.0, None, 0, 0, []
+    sel = STOP.Selector(tr["selection"])
+    shared = tr["checkpoint"] == "shared"
+    early = tr["early_stopping"]
+    prefix_state = kept_state = None
+    bad, hist, prev_calls = 0, [], None
     best_h, best_ep_h, state_h, bad_h = [-1.0] * nh, [0] * nh, [None] * nh, [0] * nh
-    f = D["fit"]
+
+    def fit_batches(bs):                                            # BatchNorm recompute pass: real ids, fixed order
+        for i in range(0, len(f["X"]), bs):
+            yield _t(f["X"][i:i + bs]), _t(f["S"][i:i + bs]), _t(f["G"][i:i + bs])
+
     for ep in range(1, max_epochs + 1):
         model.train(); t0 = time.time()
         order = rng.permutation(len(f["X"])); tot, parts_sum = 0.0, {}
@@ -184,62 +203,91 @@ def train_one(cfg, seed, D, n_channels, n_stocks, n_sectors, max_epochs, save_pa
             if tr["grad_clip"] > 0:
                 nn.utils.clip_grad_norm_(model.parameters(), tr["grad_clip"])
             opt.step()
+            if sched is not None:
+                sched.step()
+            if ema is not None:
+                ema.update(model)
             tot += loss.item() * len(b)
             for k, v in parts.items():
                 parts_sum[k] = parts_sum.get(k, 0.0) + v * len(b)
+        lr_now = opt.param_groups[0]["lr"]
+        if ema is not None:                                          # score the averaged weights
+            TU.recompute_bn(ema.model, fit_batches(tr["batch_size"]))
+            eval_model = ema.model
+        else:
+            eval_model = model
         e = D["es"]
-        P, R, _ = predict(model, e["X"], e["S"], e["G"], tr["batch_size"])
+        P, R, _ = predict(eval_model, e["X"], e["S"], e["G"], tr["batch_size"])
         es_each = macro_f1_each(e["Y"], P)
         es = float(np.mean(es_each))
+        diag = TU.holdout_diagnostics(P, e["Y"], prev_calls)
+        prev_calls = diag["calls"]
         es_rmse = [float(np.sqrt(np.mean((R[:, j] - e["R"][:, j]) ** 2))) for j in range(nh)]   # standardised units
         improved = STOP.update_per_horizon(best_h, bad_h, es_each)
         for j in improved:
             best_ep_h[j] = ep
-            state_h[j] = {k: v.detach().clone() for k, v in model.state_dict().items()}
-        new_best = es > best                                         # best 3-horizon mean so far
-        if new_best:
-            best, best_ep, bad = es, ep, 0
-            best_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
+            state_h[j] = {k: v.detach().clone() for k, v in eval_model.state_dict().items()}
+        flags = sel.update(ep, es, diag["ce_mean"])
+        if flags["prefix_improved"]:
+            prefix_state = {k: v.detach().clone() for k, v in eval_model.state_dict().items()}
+            bad = 0
         else:
             bad += 1
-        shared = tr["checkpoint"] == "shared"
-        kept_changed = new_best if shared else bool(improved)          # did the weights we would keep change?
+        if flags["kept_changed"]:
+            kept_state = prefix_state
+        kept_changed = flags["kept_changed"] if shared else bool(improved)
         if save_path is not None and kept_changed:
             torch.save({"seed": seed, "saved_at_epoch": ep, "checkpoint": tr["checkpoint"], "config": cfg,
-                        "best_epoch": best_ep, "best_inner_es_macro_f1": best,
-                        "best_epoch_per_horizon": best_ep_h, "best_inner_es_per_horizon": best_h,
-                        "states": [_cpu_state(best_state)] if shared else [_cpu_state(x) for x in state_h]}, save_path)
-        row = {"epoch": ep, "train_loss": round(tot / len(f["X"]), 5),
+                        "weights": "ema" if ema is not None else "raw", "best_epoch": sel.kept_epoch,
+                        "best_inner_es_macro_f1": sel.kept_f1, "best_epoch_per_horizon": best_ep_h,
+                        "best_inner_es_per_horizon": best_h,
+                        "states": [_cpu_state(kept_state)] if shared else [_cpu_state(x) for x in state_h]}, save_path)
+        row = {"epoch": ep, "lr_end": lr_now, "train_loss": round(tot / len(f["X"]), 5),
                **{f"train_{k}": round(v / len(f["X"]), 5) for k, v in parts_sum.items()},
                "es_macro_f1": round(es, 4), "es_per_horizon": [round(s, 4) for s in es_each],
-               "es_return_rmse_std": [round(s, 4) for s in es_rmse], "new_best_mean": new_best,
+               "es_ce_per_horizon": [round(c, 5) for c in diag["ce"]], "es_ce_mean": round(diag["ce_mean"], 5),
+               "es_call_shares": [[round(x, 4) for x in s] for s in diag["call_shares"]],
+               "es_call_agreement": None if diag["agreement"] is None else [round(a, 4) for a in diag["agreement"]],
+               "es_return_rmse_std": [round(s, 4) for s in es_rmse], "new_best_f1": flags["prefix_improved"],
+               "new_min_ce": flags["ce_improved"], "kept_epoch": sel.kept_epoch,
                "improved_horizons": [L.HORIZONS[j] for j in improved], "stall_per_horizon": list(bad_h),
                "sec": round(time.time() - t0, 1)}
         if torch.cuda.is_available():
             row["gpu_peak_gb"] = round(torch.cuda.max_memory_allocated() / 2 ** 30, 2)
         hist.append(row)
         per_h = " ".join(f"{h}d {sc:.3f}{'*' if j in improved else ' '}" for j, (h, sc) in enumerate(zip(L.HORIZONS, es_each)))
-        mark = (f"  <== BEST epoch {ep} (mean {es:.4f}){' - saved' if save_path is not None else ''}" if new_best
-                else f"      best still epoch {best_ep} ({best:.4f})")
-        print(f"    seed {seed} ep {ep:>2}: loss {tot / len(f['X']):.4f} | inner-ES mean {es:.4f} [{per_h}] "
-              f"| stall {'/'.join(map(str, bad_h))} of {tr['patience']}{mark}  ({time.time() - t0:.0f}s"
+        up = "/".join(f"{s[2]:.0%}" for s in diag["call_shares"])
+        agr = "-" if diag["agreement"] is None else "/".join(f"{a:.0%}" for a in diag["agreement"])
+        notes = [x for x, on in (("best F1 so far", flags["prefix_improved"]), ("lowest CE so far", flags["ce_improved"])) if on]
+        mark = (f"  <== KEPT = epoch {sel.kept_epoch} (F1 {sel.kept_f1:.4f}){' - saved' if save_path is not None else ''}"
+                if flags["kept_changed"] else f"      kept still epoch {sel.kept_epoch}")
+        stall = f" | stall {'/'.join(map(str, bad_h))} of {tr['patience']}" if early else ""
+        print(f"    seed {seed} ep {ep:>2}: lr {lr_now:.1e} loss {tot / len(f['X']):.4f} | ES F1 {es:.4f} [{per_h}] "
+              f"CE {diag['ce_mean']:.4f} | up calls {up} same as last {agr}{stall}"
+              + (f" ({', '.join(notes)})" if notes else "") + f"{mark}  ({time.time() - t0:.0f}s"
               + (f", GPU peak {row['gpu_peak_gb']} GB" if "gpu_peak_gb" in row else "") + ")", flush=True)
-        if STOP.should_stop(tr["stop_rule"], bad, bad_h, tr["patience"]):
+        if early and STOP.should_stop(tr["stop_rule"], bad, bad_h, tr["patience"]):
             print(f"    seed {seed}: stopped after epoch {ep} - "
                   + ("every horizon" if tr["stop_rule"] == "every" else "the 3-horizon mean")
-                  + f" went {tr['patience']} epochs without improving; weights kept from epoch {best_ep}"
+                  + f" went {tr['patience']} epochs without improving; weights kept from epoch {sel.kept_epoch}"
                   + ("" if shared else f" (per horizon: {best_ep_h})"), flush=True)
             break
     else:
-        print(f"    seed {seed}: reached max_epochs {max_epochs}; weights kept from epoch {best_ep}"
-              + ("" if tr["checkpoint"] == "shared" else f" (per horizon: {best_ep_h})"), flush=True)
-    meta = {"best_epoch": best_ep, "best_inner_es_macro_f1": round(best, 4), "epochs_run": len(hist), "history": hist,
-            "best_epoch_per_horizon": best_ep_h, "best_inner_es_per_horizon": [round(b, 4) for b in best_h]}
+        print(f"    seed {seed}: ran all {max_epochs} epochs; weights kept from epoch {sel.kept_epoch}"
+              + (f" (lowest CE at epoch {sel.ce_min_epoch})" if tr["selection"] == "f1_up_to_ce_min" else "")
+              + ("" if shared else f" (per horizon: {best_ep_h})"), flush=True)
+    meta = {"best_epoch": sel.kept_epoch, "best_inner_es_macro_f1": round(sel.kept_f1, 4), "epochs_run": len(hist),
+            "selection": tr["selection"], "weights_scored": "ema" if ema is not None else "raw",
+            "best_f1_epoch_overall": sel.prefix_epoch, "best_f1_overall": round(sel.prefix_f1, 4),
+            "es_actual_shares": [(np.bincount(D["es"]["Y"][:, j], minlength=3) / len(D["es"]["Y"])).round(4).tolist() for j in range(nh)],
+            "history": hist, "best_epoch_per_horizon": best_ep_h, "best_inner_es_per_horizon": [round(b, 4) for b in best_h]}
+    if tr["selection"] == "f1_up_to_ce_min":
+        meta["ce_min_epoch"], meta["ce_min"] = sel.ce_min_epoch, round(sel.ce_min, 5)
     if cfg["loss"]["weighting"] == "kendall":
         meta["loss_weights"] = {"w_trend": round(float(torch.exp(-loss_fn.log_var[0].detach())), 4),
                                 "w_price": round(float(torch.exp(-loss_fn.log_var[1].detach())), 4)}
-    states = [best_state] * nh if cfg["training"]["checkpoint"] == "shared" else state_h
-    epochs_used = [best_ep] * nh if cfg["training"]["checkpoint"] == "shared" else best_ep_h
+    states = [kept_state] * nh if shared else state_h
+    epochs_used = [sel.kept_epoch] * nh if shared else best_ep_h
     return model, meta, states, epochs_used
 
 
@@ -315,6 +363,8 @@ def main(argv=None):
         preds[f"y_{h}"] = D["val"]["Y"][:, j]; preds[f"fwd_{h}"] = Rva[:, j]
     preds["close_t"] = close_t
     groups = FP.groups(cfg["inputs"])
+    ens_P = {h: [] for h in L.HORIZONS}                                 # per-seed kept probabilities and return forecasts
+    ens_R = {h: [] for h in L.HORIZONS}
 
     for seed in seeds:
         t0 = time.time()
@@ -342,6 +392,7 @@ def main(argv=None):
                               "price_mae_baht": round(float(np.mean(np.abs(ph - pa))), 4),
                               "epoch_used": epochs_used[j]}
             weights_by_h[f"h{h}"] = W
+            ens_P[h].append(P[:, j]); ens_R[h].append(rp)
             preds[f"v2xx_s{seed}_class{h}"] = yhat
             for c, cls in enumerate(L.CLASSES):
                 preds[f"v2xx_s{seed}_p{h}_{cls}"] = P[:, j, c].round(6)
@@ -368,6 +419,23 @@ def main(argv=None):
                              "std": round(statistics.stdev(r["val"][f"h{h}"][k] for r in runs), 5) if len(runs) > 1 else None}
                          for k in ("macro_f1", "accuracy", "rmse", "mae", "r2_os_vs_zero", "price_rmse_baht", "price_mae_baht")}
     res["summary"] = M.report(summ, floors)
+    if cfg["report"]["seed_ensemble"] and len(runs) > 1:            # reported alongside the per-seed mean +- std
+        ens = {"how": f"mean of the {len(runs)} seeds' kept probabilities (argmax) and return forecasts", "val": {}}
+        for j, h in enumerate(L.HORIZONS):
+            Pm, rm = np.mean(ens_P[h], axis=0), np.mean(ens_R[h], axis=0)
+            yh = Pm.argmax(-1)
+            ph, pa = close_t * np.exp(rm), close_t * np.exp(Rva[:, j])
+            ens["val"][f"h{h}"] = {**M.trend_metrics(D["val"]["Y"][:, j], yh), "confusion": confusion(D["val"]["Y"][:, j], yh),
+                                   **M.return_metrics(Rva[:, j], rm),
+                                   "price_rmse_baht": round(float(np.sqrt(np.mean((ph - pa) ** 2))), 4),
+                                   "price_mae_baht": round(float(np.mean(np.abs(ph - pa))), 4)}
+            preds[f"v2xx_ens_class{h}"] = yh
+            for c, cls in enumerate(L.CLASSES):
+                preds[f"v2xx_ens_p{h}_{cls}"] = Pm[:, c].round(6)
+            preds[f"v2xx_ens_r{h}"] = rm.round(6)
+        res["seed_ensemble"] = ens
+        preds.to_csv(pred_path, index=False)
+        print("  seed ensemble: " + "  ".join(f"h{h} F1 {ens['val'][f'h{h}']['macro_f1']:.3f}" for h in L.HORIZONS), flush=True)
     out_path.write_text(json.dumps(res, indent=2, default=str), encoding="utf-8")
     print(f"wrote {out_path}, {pred_path} and weights in {wdir}")
 

@@ -3,26 +3,62 @@
   "description": "Proposal-accurate Multi-Scale PatchTST: the committee-slide architecture (slides 9-14, 19) with every number chosen by Siwat on 2026-10-19. Nothing from Phase 4 tuning carried over.",
   "decided": "Siwat, 2026-10-19 (Q&A in the v3 rework session); written 2026-10-20",
   "inputs": {
-    "price_channels": ["open", "high", "low", "close", "volume"],
+    "price_channels": [
+      "open",
+      "high",
+      "low",
+      "close",
+      "volume"
+    ],
     "ohlc_return_base": "previous_close",
-    "indicators": ["sma", "ema", "rsi", "macd", "bb_pctb", "adx"],
-    "sma_periods": [9, 21, 200],
-    "ema_periods": [9, 21, 200],
+    "indicators": [
+      "sma",
+      "ema",
+      "rsi",
+      "macd",
+      "bb_pctb",
+      "adx"
+    ],
+    "sma_periods": [
+      9,
+      21,
+      200
+    ],
+    "ema_periods": [
+      9,
+      21,
+      200
+    ],
     "rsi_period": 14,
     "macd_fast": 12,
     "macd_slow": 26,
     "bb_period": 20,
     "bb_width_k": 2.0,
     "adx_period": 14,
-    "sentiment": ["p_pos", "p_neg", "p_neu"],
+    "sentiment": [
+      "p_pos",
+      "p_neg",
+      "p_neu"
+    ],
     "sentiment_no_news": "uniform",
-    "stock_identity": ["stock_id", "sector_id"]
+    "stock_identity": [
+      "stock_id",
+      "sector_id"
+    ]
   },
   "model": {
     "family": "proposal_msp",
     "lookback": 126,
-    "patch_lengths": [1, 5, 21],
-    "patch_strides": [1, 5, 21],
+    "patch_lengths": [
+      1,
+      5,
+      21
+    ],
+    "patch_strides": [
+      1,
+      5,
+      21
+    ],
     "channel_mode": "independent",
     "revin": true,
     "encoder_norm": "batchnorm",
@@ -38,7 +74,10 @@
     "d_sector": 18,
     "stock_id_dropout": 0.1,
     "trunk_width": 128,
-    "head_hidden": [128, 64],
+    "head_hidden": [
+      128,
+      64
+    ],
     "head_dropout": 0.2
   },
   "loss": {
@@ -57,16 +96,31 @@
     "patience": 5,
     "grad_clip": 0,
     "stop_rule": "mean",
-    "checkpoint": "shared"
+    "checkpoint": "shared",
+    "early_stopping": true,
+    "selection": "f1_mean",
+    "lr_schedule": "constant",
+    "weight_averaging": "none"
   },
   "protocol": {
-    "horizons": [1, 5, 10],
-    "seeds": [4539913, 9574315, 2253758],
-    "inner_es_share": 0.10,
+    "horizons": [
+      1,
+      5,
+      10
+    ],
+    "seeds": [
+      4539913,
+      9574315,
+      2253758
+    ],
+    "inner_es_share": 0.1,
     "purge": 10,
     "split": "official 70/15/15 by date (validation only; test sealed)",
     "labels": "k x sigma_h fitted on training rows (k = 0.307 / 0.318 / 0.324 on the official split)",
     "early_stopping_metric": "inner hold-out macro-F1 per horizon"
+  },
+  "report": {
+    "seed_ensemble": false
   },
   "run": {
     "gpu": "A100 or L4 (Siwat, 2026-10-20). Measured peak 15.9 GB at batch 256 on the A100 run of 2026-10-20; results are kept in a folder per GPU because GPU arithmetic differs.",
@@ -80,6 +134,7 @@
     "sma_ema_200": "Computed from each stock's full past history, not the 126-day window; about 2.4% of sample rows are filled with the training mean.",
     "encoder_norm": "batchnorm = PatchTST's own encoder layer (post-norm, GELU, attention dropout 0), src/encoders.py.",
     "stock_id_dropout": "probability that a training row's stock_id is replaced by 'unknown' (0); stocks with no training rows always use 'unknown'.",
-    "grad_clip": "0 = no clipping"
+    "grad_clip": "0 = no clipping",
+    "v2.02 keys": "Added 2026-10-25 when v2.02 options were built; they state v2.01's behaviour explicitly (early stopping on, kept epoch = best mean macro-F1, constant lr, raw weights, no seed ensemble). The run of 2026-10-20 used exactly this behaviour."
   }
 }
