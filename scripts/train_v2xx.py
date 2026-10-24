@@ -295,6 +295,40 @@ OOM_HELP = ("GPU memory ran out. Options (each is Siwat's call): a larger GPU (A
             "gradient accumulation (note: BatchNorm statistics are then per micro-batch), or a smaller batch size.")
 
 
+def finish(res: dict, preds: pd.DataFrame, cfg: dict) -> None:
+    """Per-seed summary (mean +- std) and, when configured, the seed ensemble, computed from the saved predictions
+    (probabilities and return forecasts rounded to 6 decimals), so a sequential run and a merge of parallel per-seed
+    runs (scripts/merge_v2xx.py) give the same numbers. Writes res["summary"], res["seed_ensemble"] and ensemble
+    columns in preds."""
+    runs = res["runs"]
+    summ = {}
+    for h in L.HORIZONS:
+        summ[f"h{h}"] = {k: {"mean": round(statistics.mean(r["val"][f"h{h}"][k] for r in runs), 5),
+                             "std": round(statistics.stdev(r["val"][f"h{h}"][k] for r in runs), 5) if len(runs) > 1 else None}
+                         for k in ("macro_f1", "accuracy", "rmse", "mae", "r2_os_vs_zero", "price_rmse_baht", "price_mae_baht")}
+    res["summary"] = M.report(summ, res["floors"])
+    if not (cfg["report"]["seed_ensemble"] and len(runs) > 1):     # reported alongside the per-seed mean +- std
+        return
+    seeds = [r["seed"] for r in runs]
+    close_t = preds["close_t"].to_numpy(float)
+    ens = {"how": f"mean of the {len(runs)} seeds' kept probabilities (argmax) and return forecasts", "seeds": seeds, "val": {}}
+    for h in L.HORIZONS:
+        Y, Rv = preds[f"y_{h}"].to_numpy(), preds[f"fwd_{h}"].to_numpy(float)
+        Pm = np.mean([preds[[f"v2xx_s{sd}_p{h}_{c}" for c in L.CLASSES]].to_numpy(float) for sd in seeds], axis=0)
+        rm = np.mean([preds[f"v2xx_s{sd}_r{h}"].to_numpy(float) for sd in seeds], axis=0)
+        yh = Pm.argmax(-1)
+        ph, pa = close_t * np.exp(rm), close_t * np.exp(Rv)
+        ens["val"][f"h{h}"] = {**M.trend_metrics(Y, yh), "confusion": confusion(Y, yh), **M.return_metrics(Rv, rm),
+                               "price_rmse_baht": round(float(np.sqrt(np.mean((ph - pa) ** 2))), 4),
+                               "price_mae_baht": round(float(np.mean(np.abs(ph - pa))), 4)}
+        preds[f"v2xx_ens_class{h}"] = yh
+        for c, cls in enumerate(L.CLASSES):
+            preds[f"v2xx_ens_p{h}_{cls}"] = Pm[:, c].round(6)
+        preds[f"v2xx_ens_r{h}"] = rm.round(6)
+    res["seed_ensemble"] = ens
+    print("  seed ensemble: " + "  ".join(f"h{h} F1 {ens['val'][f'h{h}']['macro_f1']:.3f}" for h in L.HORIZONS), flush=True)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", required=True)
@@ -305,12 +339,14 @@ def main(argv=None):
     ap.add_argument("--eval-end", default=None)
     ap.add_argument("--save-weights", default=None, help="directory for the weights (default: <out>_weights/)")
     ap.add_argument("--smoke", action="store_true", help="tiny subset, 2 epochs: checks the pipeline, never a result")
+    ap.add_argument("--part", action="store_true",
+                    help="one seed of a parallel run (fewer than 3 seeds allowed); merge the parts with scripts/merge_v2xx.py")
     args = ap.parse_args(argv)
     cfg_path = ROOT / args.config if not Path(args.config).is_absolute() else Path(args.config)
     cfg = RC.load(cfg_path)
     seeds = args.seeds or cfg["protocol"]["seeds"]
-    if len(seeds) < 3 and not args.smoke:
-        ap.error("at least 3 seeds (hard rule 5)")
+    if len(seeds) < 3 and not (args.smoke or args.part):
+        ap.error("at least 3 seeds (hard rule 5); for one seed of a parallel run use --part")
     max_epochs = SMOKE["max_epochs"] if args.smoke else cfg["training"]["max_epochs"]
     print(f"config {cfg['name']}: {json.dumps({k: cfg[k] for k in ('inputs', 'model', 'loss', 'training')})}", flush=True)
     if torch.cuda.is_available():
@@ -357,14 +393,12 @@ def main(argv=None):
            "stock_vocab": stock_vocab, "val_rows_unknown_stock": int((D["val"]["S"] == 0).sum()),
            "inner_es": {"fit_end": str(pd.Timestamp(B["fit_end"]).date()), "es_start": str(pd.Timestamp(B["es_start"]).date()),
                         "rows_fit": len(fit), "rows_es": len(es)},
-           "data": info, "floors": floors, "runs": []}
+           "data": info, "floors": floors, "part": bool(args.part), "runs": []}
     preds = va[["symbol", "date"]].reset_index(drop=True).copy()
     for j, h in enumerate(L.HORIZONS):
         preds[f"y_{h}"] = D["val"]["Y"][:, j]; preds[f"fwd_{h}"] = Rva[:, j]
     preds["close_t"] = close_t
     groups = FP.groups(cfg["inputs"])
-    ens_P = {h: [] for h in L.HORIZONS}                                 # per-seed kept probabilities and return forecasts
-    ens_R = {h: [] for h in L.HORIZONS}
 
     for seed in seeds:
         t0 = time.time()
@@ -392,7 +426,6 @@ def main(argv=None):
                               "price_mae_baht": round(float(np.mean(np.abs(ph - pa))), 4),
                               "epoch_used": epochs_used[j]}
             weights_by_h[f"h{h}"] = W
-            ens_P[h].append(P[:, j]); ens_R[h].append(rp)
             preds[f"v2xx_s{seed}_class{h}"] = yhat
             for c, cls in enumerate(L.CLASSES):
                 preds[f"v2xx_s{seed}_p{h}_{cls}"] = P[:, j, c].round(6)
@@ -412,30 +445,9 @@ def main(argv=None):
         out_path.write_text(json.dumps(res, indent=2, default=str), encoding="utf-8")
         preds.to_csv(pred_path, index=False)
 
-    runs = res["runs"]
-    summ = {}
-    for h in L.HORIZONS:
-        summ[f"h{h}"] = {k: {"mean": round(statistics.mean(r["val"][f"h{h}"][k] for r in runs), 5),
-                             "std": round(statistics.stdev(r["val"][f"h{h}"][k] for r in runs), 5) if len(runs) > 1 else None}
-                         for k in ("macro_f1", "accuracy", "rmse", "mae", "r2_os_vs_zero", "price_rmse_baht", "price_mae_baht")}
-    res["summary"] = M.report(summ, floors)
-    if cfg["report"]["seed_ensemble"] and len(runs) > 1:            # reported alongside the per-seed mean +- std
-        ens = {"how": f"mean of the {len(runs)} seeds' kept probabilities (argmax) and return forecasts", "val": {}}
-        for j, h in enumerate(L.HORIZONS):
-            Pm, rm = np.mean(ens_P[h], axis=0), np.mean(ens_R[h], axis=0)
-            yh = Pm.argmax(-1)
-            ph, pa = close_t * np.exp(rm), close_t * np.exp(Rva[:, j])
-            ens["val"][f"h{h}"] = {**M.trend_metrics(D["val"]["Y"][:, j], yh), "confusion": confusion(D["val"]["Y"][:, j], yh),
-                                   **M.return_metrics(Rva[:, j], rm),
-                                   "price_rmse_baht": round(float(np.sqrt(np.mean((ph - pa) ** 2))), 4),
-                                   "price_mae_baht": round(float(np.mean(np.abs(ph - pa))), 4)}
-            preds[f"v2xx_ens_class{h}"] = yh
-            for c, cls in enumerate(L.CLASSES):
-                preds[f"v2xx_ens_p{h}_{cls}"] = Pm[:, c].round(6)
-            preds[f"v2xx_ens_r{h}"] = rm.round(6)
-        res["seed_ensemble"] = ens
+    finish(res, preds, cfg)
+    if res.get("seed_ensemble"):
         preds.to_csv(pred_path, index=False)
-        print("  seed ensemble: " + "  ".join(f"h{h} F1 {ens['val'][f'h{h}']['macro_f1']:.3f}" for h in L.HORIZONS), flush=True)
     out_path.write_text(json.dumps(res, indent=2, default=str), encoding="utf-8")
     print(f"wrote {out_path}, {pred_path} and weights in {wdir}")
 

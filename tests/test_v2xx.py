@@ -88,6 +88,13 @@ def test_config():
           and t["selection"] == "f1_up_to_ce_min" and t["weight_averaging"] == "ema" and t["ema_decay"] == 0.99
           and v2["report"]["seed_ensemble"] is True and v2["protocol"]["inner_es_share"] == 0.10 and v2["protocol"]["purge"] == 10,
           "shipped configs/v2_02.json is complete and holds Siwat's 2026-10-25 choices")
+    v3 = json.loads((ROOT / "configs/v2_03.json").read_text(encoding="utf-8"))
+    t3 = v3["training"]
+    check(RC.problems(v3) == [] and t3["lr_schedule"] == "constant" and t3["lr"] == 0.0001 and t3["batch_size"] == 256
+          and t3["selection"] == "f1_mean" and t3["early_stopping"] is True and t3["stop_rule"] == "mean" and t3["patience"] == 5
+          and t3["max_epochs"] == 30 and t3["weight_averaging"] == "ema" and t3["ema_decay"] == 0.99
+          and v3["model"]["patch_lengths"] == [2, 5, 21] and v3["inputs"]["sma_periods"] == [9, 21, 60] and v3["report"]["seed_ensemble"] is True,
+          "shipped configs/v2_03.json is complete and holds Siwat's 2026-10-25 01:15 choices")
     c = copy.deepcopy(v2); c["training"]["early_stopping"] = True; c["training"].update(stop_rule="mean", patience=5)
     check(any("cosine" in b for b in RC.problems(c)) and any("f1_up_to_ce_min" in b for b in RC.problems(c)),
           "cosine or CE-gated selection with early stopping is refused")
