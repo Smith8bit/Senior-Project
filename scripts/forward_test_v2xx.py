@@ -72,13 +72,40 @@ def load_run(run_json: Path) -> dict:
     return run
 
 
-def build(cfg: dict, fwd_root: Path) -> dict:
+def forward_news(path: Path, full: pd.DataFrame, frozen: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+    """2026 headline scores (scripts/sentiment_score_forward.py). Their trading_day was assigned on the PC with a
+    Monday-Friday calendar; it is recomputed here from `published` with the real calendar (dates on which >= 30 symbols
+    trade, as news_coverage_check.trading_calendar), by the same hard-rule-4 function."""
+    from datetime import datetime
+    from news_coverage_check import news_trading_day
+    fw = pd.read_csv(path)
+    n = full.groupby("date").symbol.size()
+    cal = sorted(d.date() for d in n[n >= 30].index)
+    td = [news_trading_day(datetime.fromisoformat(p), cal) for p in fw["published"]]
+    fw["trading_day_pc"] = fw["trading_day"]
+    fw["trading_day"] = [d.isoformat() if d else None for d in td]
+    dropped = int(fw.trading_day.isna().sum())
+    fw = fw.dropna(subset=["trading_day"])
+    assert (fw.trading_day > "2025-12-30").all(), "a forward headline falls in the frozen file's period"
+    dup = fw.merge(frozen[["url", "ticker"]], on=["url", "ticker"])
+    assert dup.empty, f"{len(dup)} (url, ticker) pairs are in both news files"
+    st = {"file": Path(path).name, "sha256": sha(path), "pairs": int(len(fw)), "dropped_after_last_trading_day": dropped,
+          "trading_day_moved_by_real_calendar": int((fw.trading_day != fw.trading_day_pc).sum()),
+          "first_day": fw.trading_day.min(), "last_day": fw.trading_day.max()}
+    return fw.drop(columns=["trading_day_pc"]), st
+
+
+def build(cfg: dict, fwd_root: Path, news_fwd: Path | None = None) -> dict:
     """Rows and inputs exactly as scripts/train_v2xx.build_data makes them, in the forward world (2026 added)."""
     with FT.forward_world(fwd_root):
         data, info, full = BT.build_dataset(root=fwd_root, return_full=True, extra="none")
     full = FP.add_price_tech(full, cfg["inputs"])
-    sent = FP.sentiment_probs(pd.read_csv(ROOT / "data/derived/sentiment_scores.csv"), full[["symbol", "date"]],
-                              cfg["inputs"]["sentiment_no_news"])
+    scores = pd.read_csv(ROOT / "data/derived/sentiment_scores.csv")
+    news_stats = None
+    if news_fwd:
+        fw, news_stats = forward_news(Path(news_fwd), full, scores)
+        scores = pd.concat([scores, fw[scores.columns]], ignore_index=True)
+    sent = FP.sentiment_probs(scores, full[["symbol", "date"]], cfg["inputs"]["sentiment_no_news"])
     key = pd.MultiIndex.from_frame(full[["symbol", "date"]])
     for c in FP.SENT_CH:
         full[c] = sent[c].reindex(key).to_numpy()
@@ -93,7 +120,7 @@ def build(cfg: dict, fwd_root: Path) -> dict:
     tdates = np.sort(tr_rows.date.unique()); cut = int(len(tdates) * (1 - cfg["protocol"]["inner_es_share"]))
     fit = tr_rows[tr_rows.date <= tdates[cut - 1 - cfg["protocol"]["purge"]]]
     return {"data": data, "info": info, "full": full, "tr_rows": tr_rows, "va": va, "fwd": fwd, "live": live,
-            "fit_symbols": sorted(fit.symbol.unique()), "channels": FP.channels(cfg["inputs"])}
+            "fit_symbols": sorted(fit.symbol.unique()), "channels": FP.channels(cfg["inputs"]), "news_stats": news_stats}
 
 
 def key_frame(d: pd.DataFrame, part: str) -> pd.DataFrame:
@@ -114,7 +141,9 @@ def predict(args):
     run = load_run(Path(args.run_json))
     cfg, seeds = run["config"], [r["seed"] for r in run["runs"]]
     t0 = time.time()
-    B = build(cfg, fwd_root)
+    B = build(cfg, fwd_root, args.news_fwd)
+    if B["news_stats"]:
+        say(f"2026 news: {B['news_stats']}")
     full, tr_rows, channels = B["full"], B["tr_rows"], B["channels"]
     say(f"{cfg['name']}: seeds {seeds}; rows val {len(B['va'])} / 2026 scored {len(B['fwd'])} / 2026 not yet scorable "
         f"{len(B['live'])}; {len(channels)} channels; built in {time.time() - t0:.0f}s; device {TV.DEVICE}")
@@ -145,7 +174,7 @@ def predict(args):
         frames[k]["close_t"] = d["close"].to_numpy(float)
     meta = {"model": cfg["name"], "seeds": seeds, "news_share": news_share, "torch": torch.__version__,
             "device": str(TV.DEVICE), "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
-            "run_json": str(args.run_json), "weights": {}}
+            "run_json": str(args.run_json), "weights": {}, "news_fwd": B["news_stats"]}
     vocab0 = None
     for seed in seeds:
         wf = wdir / f"seed{seed}.pt"
@@ -283,6 +312,9 @@ def score(args):
     res["validation_news_blanked"] = nb
     pm = json.loads((out_dir / "predict_meta.json").read_text(encoding="utf-8"))
     res["news_share"], res["unknown_stock_rows"] = pm["news_share"], pm["unknown_stock_rows"]
+    res["news_fwd"] = pm.get("news_fwd")
+    res["news_2026"] = "scored 2026 headlines" if pm.get("news_fwd") else "none (every 2026 day gets the no-news fill)"
+    say(f"share of stock-days with news: {pm['news_share']}" + (f"; 2026 news file: {pm['news_fwd']}" if pm.get("news_fwd") else ""))
 
     # 3) comparison models on the same 2026 rows (optional: the main model v2 forward test folder)
     comp = {}
@@ -489,6 +521,7 @@ def main(argv=None):
     ap.add_argument("--run-preds", default=None, help="the run's validation predictions (default: <run>_preds.csv.gz)")
     ap.add_argument("--weights", default=None, help="the run's weights folder (default: <run>_weights/)")
     ap.add_argument("--v2-forward", default=None, help="main model v2 forward-test folder, for v2 and XGBoost on the same rows")
+    ap.add_argument("--news-fwd", default=None, help="2026 headline scores (scripts/sentiment_score_forward.py); default none")
     ap.add_argument("--redo", action="store_true")
     ap.add_argument("--smoke-rows", type=int, default=0, help="local plumbing test: predict only this many rows per part")
     args = ap.parse_args(argv)

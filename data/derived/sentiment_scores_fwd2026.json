@@ -1,0 +1,46 @@
+{
+  "computed_at": "2026-10-26T12:46:27+00:00",
+  "config": "wisesight+ticker_section_headline",
+  "model_dirs": [
+    "C:\\Users\\HP\\Documents\\GitHub\\Senior Project\\models\\sentiment_finetune\\sentiment\\wisesight+ticker_section_headline\\seed20261006",
+    "C:\\Users\\HP\\Documents\\GitHub\\Senior Project\\models\\sentiment_finetune\\sentiment\\wisesight+ticker_section_headline\\seed20261007",
+    "C:\\Users\\HP\\Documents\\GitHub\\Senior Project\\models\\sentiment_finetune\\sentiment\\wisesight+ticker_section_headline\\seed20261008"
+  ],
+  "selection_sha256": "e475610da476a271192c3be12129e15871cd155147a42f17c7711b8f12a584e3",
+  "labels_sha256": "a810cde7d3d9dd0e7da3e6c5ef5f700612ba9969884fb3ca7dd52e452eb6b861",
+  "articles_file": "data/raw/kaohoon_articles_fwd2026/articles.jsonl",
+  "articles_sha256": "e0a0fcb8d3ed9bda6f780d228fcea3f3ed036ab0d37419c2170a5c86e0462b8e",
+  "population_rule": "trading day (16:30 ICT rule) after 2025-12-30; trading_day column uses Mon-Fri, recomputed with the real 2026 calendar by the forward test",
+  "pairs": 8472,
+  "distinct_inputs": 8423,
+  "articles": {
+    "kept": 4346,
+    "section column or summary": 1055,
+    "not parsed / not Thai / no time or headline": 1,
+    "trading day on or before 2025-12-30 (frozen file's period)": 9
+  },
+  "pairs_by_month": {
+    "2025-12": 2,
+    "2026-01": 547,
+    "2026-02": 659,
+    "2026-03": 719,
+    "2026-04": 731,
+    "2026-05": 867,
+    "2026-06": 902,
+    "2026-07": 1093,
+    "2026-08": 1118,
+    "2026-09": 1103,
+    "2026-10": 731
+  },
+  "excluded_sections": [
+    "column",
+    "summary"
+  ],
+  "restatement_pairs": 951,
+  "output_sha256": "213c46c8521a6c4e23c30387ba58b95f50717f3eb17a393d315be9beae511067",
+  "git_commit": "e162e67",
+  "versions": {
+    "torch": "2.14.1+cpu",
+    "transformers": "5.18.0"
+  }
+}
