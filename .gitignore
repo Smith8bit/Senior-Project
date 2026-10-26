@@ -8,3 +8,4 @@ __pycache__/
 
 # Fine-tuned model weights (hundreds of MB each)
 models/
+results/
