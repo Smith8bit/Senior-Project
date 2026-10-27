@@ -88,3 +88,18 @@ def holdout_diagnostics(P: np.ndarray, Y: np.ndarray, prev_calls: np.ndarray | N
     shares = [(np.bincount(calls[:, j], minlength=3) / N).tolist() for j in range(H)]
     agree = None if prev_calls is None else (calls == prev_calls).mean(axis=0).tolist()
     return {"ce": ce.tolist(), "ce_mean": float(ce.mean()), "call_shares": shares, "agreement": agree, "calls": calls}
+
+
+def blank_windows(X: np.ndarray, rows: np.ndarray, channels: list, values) -> np.ndarray:
+    """v2.04 news-robust training (Siwat, 2026-10-27): a copy of the window batch X [N, L, C] in which the windows
+    `rows` get the no-news value on every real day for each channel in `channels` (the standardised no-news fill).
+    Padding positions (before a segment starts: every channel exactly 0) stay 0, as sequences.windows leaves them."""
+    out = X.copy()
+    if len(rows) == 0:
+        return out
+    real = ~(X[rows] == 0).all(-1)                                   # [n, L]
+    for c, v in zip(channels, values):
+        sub = out[rows, :, c]
+        sub[real] = v
+        out[rows, :, c] = sub
+    return out

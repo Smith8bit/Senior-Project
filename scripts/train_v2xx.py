@@ -14,6 +14,10 @@
   MAE of the implied closing price C_t * exp(r_hat) in baht, each beside its zero-return (persistence) floor.
 * v2.02 options: cosine learning rate, EMA weights (BatchNorm recomputed), selection "f1_up_to_ce_min", no early
   stopping, per-epoch hold-out diagnostics (cross-entropy, call shares, call agreement), seed ensemble.
+* v2.04 option: news-robust training (training.news_blank_p, news_blank_unit "window"): each training window, with
+  that probability, gets the no-news fill on every day of its sentiment channels (own random stream, seed + 3).
+  BatchNorm statistics are recomputed on the fit rows with the same blanking rate and a fixed mask (seed + 4).
+  Hold-out and validation are always scored with the news as it is.
 * Saves the weights of every seed. On a GPU, reports the peak memory per epoch and stops with a clear message if
   memory runs out.
 """
@@ -139,7 +143,12 @@ def build_data(cfg: dict, news_path: Path, fold: dict | None = None, smoke: bool
     sectors = pd.read_csv(ROOT / "data/sectors.csv")
     sec_id = {s: i + 1 for i, s in enumerate(sorted(sectors.sector.unique()))}
     sym2g = dict(zip(sectors.symbol, sectors.sector.map(sec_id)))
-    D = {}
+    fill = {"zeros": (0.0, 0.0, 0.0), "neutral": (0.0, 0.0, 1.0), "uniform": (1 / 3, 1 / 3, 1 / 3)}[cfg["inputs"]["sentiment_no_news"]]
+    mu = full.loc[tr_rows.index, FP.SENT_CH].mean().to_numpy(float)    # same statistics as SQ.standardise_full
+    sd = full.loc[tr_rows.index, FP.SENT_CH].std().replace(0, 1.0).to_numpy(float)
+    news_blank = {"channels": [channels.index(c) for c in FP.SENT_CH],
+                  "values": np.nan_to_num(((np.asarray(fill) - mu) / sd).astype(np.float32)).tolist()}
+    D = {"news_blank": news_blank}
     for k, d in (("fit", fit), ("es", es), ("val", va)):
         D[k] = {"X": SQ.windows(full, z, d.index, lookback),
                 "Y": d[[f"y_{h}" for h in L.HORIZONS]].to_numpy(np.int64),
@@ -177,6 +186,12 @@ def train_one(cfg, seed, D, n_channels, n_stocks, n_sectors, max_epochs, save_pa
     rng = np.random.default_rng(seed)
     drop_rng = np.random.default_rng(seed + 2)                      # stock_id dropout (own stream)
     p_drop = cfg["model"].get("stock_id_dropout", 0.0)
+    blank_rng = np.random.default_rng(seed + 3)                     # news blanking (own stream; unused when p = 0)
+    p_blank = tr.get("news_blank_p", 0.0)
+    nbk = D.get("news_blank", {"channels": [], "values": []})
+    if p_blank > 0 and not nbk["channels"]:
+        raise ValueError("training.news_blank_p > 0 needs the sentiment channel positions (D['news_blank'])")
+    nb_ch, nb_val = nbk["channels"], nbk["values"]
     nh = D["es"]["Y"].shape[1]
     sel = STOP.Selector(tr["selection"])
     shared = tr["checkpoint"] == "shared"
@@ -185,19 +200,28 @@ def train_one(cfg, seed, D, n_channels, n_stocks, n_sectors, max_epochs, save_pa
     bad, hist, prev_calls = 0, [], None
     best_h, best_ep_h, state_h, bad_h = [-1.0] * nh, [0] * nh, [None] * nh, [0] * nh
 
+    bn_mask = np.random.default_rng(seed + 4).random(len(f["X"])) < p_blank   # fixed blanking for the recompute pass
+
     def fit_batches(bs):                                            # BatchNorm recompute pass: real ids, fixed order
         for i in range(0, len(f["X"]), bs):
-            yield _t(f["X"][i:i + bs]), _t(f["S"][i:i + bs]), _t(f["G"][i:i + bs])
+            xb = f["X"][i:i + bs]
+            if p_blank > 0:
+                xb = TU.blank_windows(xb, np.flatnonzero(bn_mask[i:i + bs]), nb_ch, nb_val)
+            yield _t(xb), _t(f["S"][i:i + bs]), _t(f["G"][i:i + bs])
 
     for ep in range(1, max_epochs + 1):
         model.train(); t0 = time.time()
-        order = rng.permutation(len(f["X"])); tot, parts_sum = 0.0, {}
+        order = rng.permutation(len(f["X"])); tot, parts_sum, n_blanked = 0.0, {}, 0
         for i in range(0, len(order), tr["batch_size"]):
             b = order[i:i + tr["batch_size"]]
             sb = f["S"][b].copy()
             if p_drop > 0:
                 sb[drop_rng.random(len(b)) < p_drop] = 0
-            out = model(_t(f["X"][b]), _t(sb), _t(f["G"][b]))
+            xb = f["X"][b]
+            if p_blank > 0:
+                rows = np.flatnonzero(blank_rng.random(len(b)) < p_blank)
+                xb = TU.blank_windows(xb, rows, nb_ch, nb_val); n_blanked += len(rows)
+            out = model(_t(xb), _t(sb), _t(f["G"][b]))
             loss, parts = loss_fn(out, _t(f["Y"][b]), _t(f["R"][b]))
             opt.zero_grad(); loss.backward()
             if tr["grad_clip"] > 0:
@@ -251,7 +275,7 @@ def train_one(cfg, seed, D, n_channels, n_stocks, n_sectors, max_epochs, save_pa
                "es_return_rmse_std": [round(s, 4) for s in es_rmse], "new_best_f1": flags["prefix_improved"],
                "new_min_ce": flags["ce_improved"], "kept_epoch": sel.kept_epoch,
                "improved_horizons": [L.HORIZONS[j] for j in improved], "stall_per_horizon": list(bad_h),
-               "sec": round(time.time() - t0, 1)}
+               "news_blanked_share": round(n_blanked / len(f["X"]), 4), "sec": round(time.time() - t0, 1)}
         if torch.cuda.is_available():
             row["gpu_peak_gb"] = round(torch.cuda.max_memory_allocated() / 2 ** 30, 2)
         hist.append(row)
@@ -262,6 +286,7 @@ def train_one(cfg, seed, D, n_channels, n_stocks, n_sectors, max_epochs, save_pa
         mark = (f"  <== KEPT = epoch {sel.kept_epoch} (F1 {sel.kept_f1:.4f}){' - saved' if save_path is not None else ''}"
                 if flags["kept_changed"] else f"      kept still epoch {sel.kept_epoch}")
         stall = f" | stall {'/'.join(map(str, bad_h))} of {tr['patience']}" if early else ""
+        stall += f" | news blanked {row['news_blanked_share']:.0%}" if p_blank > 0 else ""
         print(f"    seed {seed} ep {ep:>2}: lr {lr_now:.1e} loss {tot / len(f['X']):.4f} | ES F1 {es:.4f} [{per_h}] "
               f"CE {diag['ce_mean']:.4f} | up calls {up} same as last {agr}{stall}"
               + (f" ({', '.join(notes)})" if notes else "") + f"{mark}  ({time.time() - t0:.0f}s"

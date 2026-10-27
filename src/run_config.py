@@ -183,6 +183,14 @@ def problems(cfg: dict) -> list[str]:
     if (t.get("lr_schedule") == "cosine" and isinstance(t.get("lr_min"), (int, float)) and isinstance(t.get("lr"), (int, float))
             and t["lr_min"] >= t["lr"]):
         out.append("training.lr_min must be smaller than training.lr")
+    # v2.04 option (Siwat, 2026-10-27): news-robust training. Optional; absent = 0 = the v2.01-v2.03 behaviour.
+    if "news_blank_p" in t:
+        nb = t["news_blank_p"]
+        if not _ok(PROB, nb):
+            out.append(f"training.news_blank_p = {nb!r} is not valid (accepts {PROB})")
+        elif nb > 0 and t.get("news_blank_unit") != "window":
+            out.append("training.news_blank_unit must be 'window' when training.news_blank_p > 0 "
+                       "(the whole look-back window's sentiment channels get the no-news fill)")
     p = cfg.get("protocol", {})
     if len(p.get("seeds") or []) < 3:
         out.append("protocol.seeds: at least 3 seeds (hard rule 5)")

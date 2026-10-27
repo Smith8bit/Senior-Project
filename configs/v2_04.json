@@ -1,0 +1,149 @@
+{
+  "name": "v2.04",
+  "description": "v2.03 + news-robust training (one change): each training window, with probability 0.2, gets the no-news fill [1/3, 1/3, 1/3] on every day of its 3 sentiment channels. Everything else exactly as v2.03. Siwat, 2026-10-27, after v2.03beta showed the sentiment content adds nothing (placebo) while blanked news costs about 0.03 at 5 / 10 d and pushes calls to 'down'.",
+  "decided": "Siwat, 2026-10-27 00:40-00:50 (multiple choice, after v2.03beta)",
+  "inputs": {
+    "price_channels": [
+      "open",
+      "high",
+      "low",
+      "close",
+      "volume"
+    ],
+    "ohlc_return_base": "previous_close",
+    "indicators": [
+      "sma",
+      "ema",
+      "rsi",
+      "macd",
+      "bb_pctb",
+      "adx"
+    ],
+    "sma_periods": [
+      9,
+      21,
+      60
+    ],
+    "ema_periods": [
+      9,
+      21,
+      60
+    ],
+    "rsi_period": 14,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "bb_period": 20,
+    "bb_width_k": 2.0,
+    "adx_period": 14,
+    "sentiment": [
+      "p_pos",
+      "p_neg",
+      "p_neu"
+    ],
+    "sentiment_no_news": "uniform",
+    "stock_identity": [
+      "stock_id",
+      "sector_id"
+    ]
+  },
+  "model": {
+    "family": "proposal_msp",
+    "lookback": 126,
+    "patch_lengths": [
+      2,
+      5,
+      21
+    ],
+    "patch_strides": [
+      2,
+      5,
+      21
+    ],
+    "channel_mode": "independent",
+    "revin": true,
+    "encoder_norm": "batchnorm",
+    "d_model": 128,
+    "n_heads": 16,
+    "n_layers": 3,
+    "d_ff": 256,
+    "dropout": 0.2,
+    "pooling": "mean",
+    "scale_fusion": "attention",
+    "fusion_hidden": 128,
+    "d_stock": 32,
+    "d_sector": 18,
+    "stock_id_dropout": 0.1,
+    "trunk_width": 128,
+    "head_hidden": [
+      128,
+      64
+    ],
+    "head_dropout": 0.2
+  },
+  "loss": {
+    "price_target": "log_return",
+    "weighting": "fixed",
+    "w_trend": 1.0,
+    "w_price": 1.0,
+    "price_loss": "mse",
+    "huber_delta": null
+  },
+  "training": {
+    "lr": 0.0001,
+    "lr_schedule": "constant",
+    "weight_decay": 0.01,
+    "batch_size": 256,
+    "max_epochs": 30,
+    "early_stopping": true,
+    "stop_rule": "mean",
+    "patience": 5,
+    "grad_clip": 0,
+    "checkpoint": "shared",
+    "selection": "f1_mean",
+    "weight_averaging": "ema",
+    "ema_decay": 0.99,
+    "news_blank_p": 0.2,
+    "news_blank_unit": "window"
+  },
+  "protocol": {
+    "horizons": [
+      1,
+      5,
+      10
+    ],
+    "seeds": [
+      4539913,
+      9574315,
+      2253758
+    ],
+    "inner_es_share": 0.1,
+    "purge": 10,
+    "split": "official 70/15/15 by date (validation only; test sealed)",
+    "labels": "k x sigma_h fitted on training rows (k = 0.307 / 0.318 / 0.324 on the official split)",
+    "early_stopping_metric": "inner hold-out macro-F1 per horizon"
+  },
+  "report": {
+    "seed_ensemble": true
+  },
+  "run": {
+    "gpu": "Colab only (Linux; ADX tie rule, claude/log-entry-2026-10-27-adx-tie-platform.md). Seeds one after another (parallel gave no speed-up).",
+    "walk_forward": false
+  },
+  "_notes": {
+    "seeds": "4539913 / 9574315 / 2253758, chosen by Siwat 2026-10-20, replacing 20261015 / 16 / 17 used by E00-E31 and v2 (so runs are no longer paired seed-for-seed with those).",
+    "fixed": "price_channels, sentiment, stock_identity: slide 9. indicators: proposal scope 2. pooling mean, scale_fusion attention: slides 11 and 19. trunk_width 128 and head_hidden 128/64: slides 12-13. price_target log_return: slide 9 and hard rule 1. horizons 1/5/10: proposal scope 4. protocol: earlier pre-registered decisions.",
+    "patches": "2 / 5 / 21, stride = length (the 2026-10-19 rule kept; not re-asked). Look-back 126: tokens 63 / 25 / 6; the 2-day and month scales cover all 126 days, the week scale skips the oldest day.",
+    "sma_ema_200": "Computed from each stock's full past history, not the 126-day window; about 2.4% of sample rows are filled with the training mean.",
+    "encoder_norm": "batchnorm = PatchTST's own encoder layer (post-norm, GELU, attention dropout 0), src/encoders.py.",
+    "stock_id_dropout": "probability that a training row's stock_id is replaced by 'unknown' (0); stocks with no training rows always use 'unknown'.",
+    "grad_clip": "0 = no clipping",
+    "sma_ema_60": "Period 60 leaves 0.15% of training rows gap-filled with the training mean (measured 2026-10-25); period 200 left 2.7%.",
+    "training": "Constant learning rate 1e-4 (v2.01). Kept epoch = best 3-horizon mean macro-F1 of the EMA weights (v2.01's rule); training stops 5 epochs after that best, or at 30 epochs (Siwat answered both 'v2.01: F1 + early stop' and '30 epochs'; read as early stopping with a 30-epoch cap). EMA of the weights, decay 0.99, ~172 steps per epoch at batch 256, so it averages ~100 steps, about 0.6 epoch; BatchNorm recomputed for the EMA weights; only EMA weights scored, kept and saved.",
+    "report": "The average of the 3 seeds' probabilities is reported alongside the per-seed mean +- std, which stays the headline.",
+    "inner hold-out": "protocol.inner_es_share 0.10 and purge 10 chosen by Siwat on 2026-10-25 (before that they were Claude's 2026-10-15 defaults).",
+    "why": "v2.02 seed 4539913 (A100, 2026-10-25): hold-out macro-F1 rose to 0.379 at epoch 7 and held near 0.375, but hold-out cross-entropy was lowest at epoch 2 (1.0947) and rose to 1.118, above the uniform guess ln 3 = 1.0986 from epoch 6, so the CE-gated rule kept epoch 2 (F1 0.350); validation 0.316 / 0.357 / 0.347. Run stopped by Siwat after seed 1.",
+    "news_blank": "Training windows only: hold-out (epoch choice) and validation are scored with the news as it is. Unit = the whole 126-day window (as 2026 without news, or a crawl outage). Own random stream (seed + 3), so with p = 0 training is exactly v2.03's. BatchNorm statistics of the EMA weights are recomputed with the same blanking rate on a fixed mask (seed + 4). Padding days (before a segment starts) stay 0.",
+    "adopt_rule": "Pre-registered (Siwat, 2026-10-27): v2.04 is adopted if (a) its validation macro-F1 with news blanked, 3-horizon mean, is above v2.03's (same rows, same blanking), and (b) with news on, the paired 95% date-block interval of v2.04 - v2.03 (3-horizon mean) is not entirely below 0. Judged on the raw model (the training change); ts + blend reported beside it.",
+    "post_hoc": "Scored with ts + blend (w on 0, 0.1, ..., 1, fitted on v2.04's own inner hold-out), raw and XGBoost alone beside (Siwat, 2026-10-27)."
+  }
+}

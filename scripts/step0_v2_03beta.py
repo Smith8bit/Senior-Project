@@ -567,7 +567,7 @@ def analyze(args):
         rep[f"h{h}"] = {"val_max_abs_prob_diff": round(dp, 7), "es_f1_here": es_here, "es_f1_run": es_run}
         ok &= dp <= FV.REPRO_PROB_TOL and (args.smoke_rows or max(abs(a - b) for a, b in zip(es_here, es_run)) <= FV.REPRO_F1_TOL)
     res["reproduction"] = rep | {"ok": bool(ok)}
-    say("REPRODUCTION (CPU forward passes vs the A100 run): " + "; ".join(
+    say("REPRODUCTION (predictions here vs the training run): " + "; ".join(
         f"h{h} val |dp| {rep[f'h{h}']['val_max_abs_prob_diff']:.1e}, hold-out F1 {rep[f'h{h}']['es_f1_here']} vs {rep[f'h{h}']['es_f1_run']}" for h in HS))
     if not ok:
         P["summary"].write_text(json.dumps(res, indent=2, default=str), encoding="utf-8")
@@ -697,10 +697,12 @@ def main(argv=None):
     ap.add_argument("--fwd-inputs", default=str(ROOT / "results/forward_2026/inputs"))
     ap.add_argument("--news-fwd", default=str(ROOT / "data/derived/sentiment_scores_fwd2026.csv"))
     ap.add_argument("--out-dir", default=str(ROOT / "results/v2_03beta"))
+    ap.add_argument("--label", default=NAME, help="name printed and stored for this post-hoc run (e.g. 'v2.04 post-hoc')")
     ap.add_argument("--redo", action="store_true")
     ap.add_argument("--core-only", action="store_true", help="predict: inner hold-out, validation and 2026 only (no placebo)")
     ap.add_argument("--smoke-rows", type=int, default=0, help="plumbing test only: this many rows per part")
     args = ap.parse_args(argv)
+    globals()["NAME"] = args.label
     rj = Path(args.run_json)
     args.weights = args.weights or str(rj.with_name(rj.stem + "_weights"))
     stages = ["prepare", "predict", "trees", "analyze"] if args.stage == "all" else [args.stage]
