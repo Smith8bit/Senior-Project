@@ -55,3 +55,26 @@ def fit_k(train_r: np.ndarray, train_sigma: np.ndarray, grid=np.arange(0.005, 2.
             best, best_loss = float(round(k, 3)), loss
     y = classify(train_r, train_sigma, best)
     return best, {c: round(float((y == i).mean()), 4) for i, c in enumerate(CLASSES)}
+
+
+# ---------------------------------------------------------------------------------------------------- B2 (v2.08)
+# Siwat, 2026-11-03 (claude/decision-2026-11-03-binary-label-b2.md): the "true data" 2-class next-day label.
+#   delta = raw close(t+1) - raw close(t) inside one price segment (Siamchart closes, no split / dividend adjustment);
+#   0 = down if delta < 0, 1 = not down (up or unchanged) if delta >= 0; exact-zero days are class 1.
+B2_CLASSES = ("down", "not_down")     # encoded 0, 1
+
+
+def b2_next_day(full: pd.DataFrame, rows) -> tuple[np.ndarray, np.ndarray]:
+    """full: the daily frame (raw `close`, `seg_key`, one row per stock trading day, sorted by symbol and date);
+    rows: index labels of the sample rows. Returns (y, prev): y = B2 label of the move t -> t+1 (NaN-free: raises if a
+    row has no next close in its segment); prev = the same rule on the move t-1 -> t (the "direction continues" floor),
+    -1 where day t is the first day of its segment."""
+    g = full.groupby("seg_key", sort=False)["close"]
+    nxt, prv, c = g.shift(-1), g.shift(1), full["close"]
+    d_next = (nxt - c).round(6).loc[rows]
+    if d_next.isna().any():
+        raise ValueError(f"{int(d_next.isna().sum())} sample rows have no next-day close in their segment")
+    d_prev = (c - prv).round(6).loc[rows]
+    y = (d_next.to_numpy() >= 0).astype(np.int64)
+    prev = np.where(d_prev.isna(), -1, (d_prev.fillna(0).to_numpy() >= 0).astype(np.int64))
+    return y, prev

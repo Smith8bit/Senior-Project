@@ -5,8 +5,9 @@ import numpy as np
 from sklearn.metrics import accuracy_score, f1_score
 
 
-def trend_metrics(y_true, y_pred) -> dict:
-    return {"macro_f1": round(float(f1_score(y_true, y_pred, average="macro", labels=[0, 1, 2], zero_division=0)), 4),
+def trend_metrics(y_true, y_pred, n_classes: int = 3) -> dict:
+    """n_classes 3 (down / flat / up) or 2 (v2.08 B2: down / not down); macro-F1 averages over exactly those classes."""
+    return {"macro_f1": round(float(f1_score(y_true, y_pred, average="macro", labels=list(range(n_classes)), zero_division=0)), 4),
             "accuracy": round(float(accuracy_score(y_true, y_pred)), 4)}
 
 
@@ -19,8 +20,8 @@ def return_metrics(r_true, r_pred) -> dict:
             "direction_acc": round(float(np.mean(np.sign(r_pred[r_true != 0]) == np.sign(r_true[r_true != 0]))), 4) if np.any(r_pred) else None}
 
 
-def majority_class(y_train) -> int:
-    return int(np.bincount(np.asarray(y_train), minlength=3).argmax())
+def majority_class(y_train, n_classes: int = 3) -> int:
+    return int(np.bincount(np.asarray(y_train), minlength=n_classes).argmax())
 
 
 def report(model: dict, floor: dict) -> dict:

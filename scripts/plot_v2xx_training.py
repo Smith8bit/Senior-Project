@@ -35,6 +35,12 @@ from matplotlib.ticker import MaxNLocator  # noqa: E402
 SURFACE, INK, INK2, GRID = "#fcfcfb", "#0b0b0b", "#52514e", "#e4e3df"
 HORIZON = {"1 d": "#2a78d6", "5 d": "#eb6834", "10 d": "#1baf7a"}     # each horizon keeps its colour across runs
 CLASS = {"down": "#eda100", "flat": "#e87ba4", "up": "#008300"}   # validated (palette slots 4-6); labelled at line ends
+CLASS_B2 = {"down": "#eda100", "not_down": "#008300"}              # v2.08 B2 label: the same colours for down / up side
+
+
+def class_colours(res: dict) -> dict:
+    """{class: colour} in the model's class order (3 classes, or 2 for v2.08's B2 label)."""
+    return CLASS_B2 if res["config"].get("protocol", {}).get("label_rule") == "b2_raw_close" else CLASS
 
 
 def _style(ax, title, ylabel):
@@ -84,6 +90,8 @@ def plot(run_path: Path, out_path: Path | None = None) -> Path:
                              facecolor=SURFACE)
     name = res["config"]["name"]
     hc = horizon_colours(res)
+    K = len(class_colours(res))                                    # chance macro-F1 = 1 / K is not exact for K = 2,
+    chance, uniform = 1 / K if K == 3 else 0.5, math.log(K)        # but a random guess at the class shares scores 0.5
     for r, run in enumerate(runs):
         h = run["history"]
         ep = [e["epoch"] for e in h]
@@ -101,12 +109,12 @@ def plot(run_path: Path, out_path: Path | None = None) -> Path:
         kept_note = f"kept epoch {best}" + (f" · lowest CE epoch {ce_min}" if ce_min else "")
         _style(a0, f"seed {run['seed']} · {kept_note}\ntraining loss by task", "loss")
         _horizon_lines(ax["f1"], ep, h, "es_per_horizon", hc)
-        ax["f1"].axhline(1 / 3, color=INK2, linewidth=1, linestyle=":")
+        ax["f1"].axhline(chance, color=INK2, linewidth=1, linestyle=":")
         _style(ax["f1"], "inner hold-out macro-F1 (selection signal)", "macro-F1")
         if has_ce:
             _horizon_lines(ax["ce"], ep, h, "es_ce_per_horizon", hc)
-            ax["ce"].axhline(math.log(3), color=INK2, linewidth=1, linestyle=":")
-            _style(ax["ce"], "inner hold-out cross-entropy (uniform guess = ln 3)", "cross-entropy")
+            ax["ce"].axhline(uniform, color=INK2, linewidth=1, linestyle=":")
+            _style(ax["ce"], f"inner hold-out cross-entropy (uniform guess = ln {K})", "cross-entropy")
             _horizon_lines(ax["agree"], ep, h, "es_call_agreement", hc)
             _style(ax["agree"], "hold-out calls unchanged from previous epoch", "share")
         if has_grad:
@@ -133,7 +141,8 @@ def plot(run_path: Path, out_path: Path | None = None) -> Path:
                  fontsize=12, color=INK)
     from matplotlib.lines import Line2D
     handles = [Line2D([], [], color=c, linewidth=2, label=l) for l, c in hc.items()]
-    handles += [Line2D([], [], color=INK2, linewidth=1, linestyle=":", label="chance (1/3) / uniform guess (ln 3)"),
+    handles += [Line2D([], [], color=INK2, linewidth=1, linestyle=":",
+                       label=f"chance ({'1/3' if K == 3 else '0.5'}) / uniform guess (ln {K})"),
                 Line2D([], [], color=INK, linewidth=2, label="trend loss (cross-entropy)"),
                 Line2D([], [], color=INK2, linewidth=2, linestyle="--", label="price loss (MSE)"),
                 Line2D([], [], color=INK2, linewidth=1, alpha=0.6, label="epoch whose weights were kept")]
@@ -162,7 +171,7 @@ def plot_calls(run_path: Path, out_path: Path | None = None) -> Path | None:
         actual = run.get("es_actual_shares")
         for j, hz in enumerate(hc):
             a = axes[r][j]
-            for c, (cls, col) in enumerate(CLASS.items()):
+            for c, (cls, col) in enumerate(class_colours(res).items()):
                 y = [e["es_call_shares"][j][c] for e in h]
                 a.plot(ep, y, color=col, linewidth=2)
                 _end_label(a, ep[-1], y[-1], cls, col)
@@ -173,7 +182,7 @@ def plot_calls(run_path: Path, out_path: Path | None = None) -> Path | None:
             a.margins(x=0.08)
             _style(a, f"seed {run['seed']} · {hz}: share of hold-out calls", "share of calls")
     from matplotlib.lines import Line2D
-    handles = [Line2D([], [], color=c, linewidth=2, label=f"called {k}") for k, c in CLASS.items()]
+    handles = [Line2D([], [], color=c, linewidth=2, label=f"called {k.replace('_', ' ')}") for k, c in class_colours(res).items()]
     handles += [Line2D([], [], color=INK2, linewidth=1, linestyle=":", label="true share on the hold-out"),
                 Line2D([], [], color=INK2, linewidth=1, alpha=0.6, label="epoch whose weights were kept")]
     fig.suptitle(f"{res['config']['name']} — what the model calls on the inner hold-out", x=0.01, ha="left",

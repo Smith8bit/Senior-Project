@@ -80,14 +80,14 @@ def steps_per_epoch(n_rows: int, batch_size: int) -> int:
 
 
 def holdout_diagnostics(P: np.ndarray, Y: np.ndarray, prev_calls: np.ndarray | None) -> dict:
-    """P [N, H, 3] probabilities, Y [N, H] labels. Cross-entropy per horizon (natural log; ln 3 = 1.0986 is the
-    uniform guess), predicted-class shares per horizon (down, flat, up), and the share of rows whose predicted class is
+    """P [N, H, K] probabilities (K = 3, or 2 for v2.08's B2 label), Y [N, H] labels. Cross-entropy per horizon (natural
+    log; ln K is the uniform guess), predicted-class shares per horizon (in class order), and the share of rows whose predicted class is
     the same as in the previous epoch (None at the first epoch)."""
     N, H, _ = P.shape
     p_true = np.take_along_axis(P, Y[..., None], axis=-1)[..., 0]
     ce = (-np.log(np.clip(p_true, 1e-12, None))).mean(axis=0)
     calls = P.argmax(-1)
-    shares = [(np.bincount(calls[:, j], minlength=3) / N).tolist() for j in range(H)]
+    shares = [(np.bincount(calls[:, j], minlength=P.shape[-1]) / N).tolist() for j in range(H)]   # per class (2 or 3)
     agree = None if prev_calls is None else (calls == prev_calls).mean(axis=0).tolist()
     return {"ce": ce.tolist(), "ce_mean": float(ce.mean()), "call_shares": shares, "agreement": agree, "calls": calls}
 

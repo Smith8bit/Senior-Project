@@ -26,6 +26,10 @@
   only. Price metrics are then absent from the results. An ablation of the proposal's trained price head (L5 / L6).
 * v2.07 option: protocol.horizons may be a subset of [1, 5, 10] (an ablation of proposal O1); every array, metric
   and file then covers only those horizons, and the kept epoch is chosen on their mean hold-out macro-F1.
+* v2.08 option: protocol.label_rule "b2_raw_close" (Siwat, 2026-11-03, "true data"): the 2-class next-day label
+  B2 (0 = down if raw close(t+1) < raw close(t), else 1 = not down), horizons [1] only. The rows are unchanged; the
+  trend head has 2 outputs; floors become majority / stratified random / direction continues / reverses on B2.
+  Absent = "k_sigma" (the proposal's 3-class k x sigma label).
 * Saves the weights of every seed. On a GPU, reports the peak memory per epoch and stops with a clear message if
   memory runs out.
 """
@@ -71,18 +75,28 @@ def horizons(cfg: dict) -> tuple:
     return tuple(cfg["protocol"]["horizons"])
 
 
+def label_rule(cfg: dict) -> str:
+    """'k_sigma' (proposal, 3 classes; the default) or 'b2_raw_close' (v2.08, 2 classes)."""
+    return cfg["protocol"].get("label_rule", "k_sigma")
+
+
+def classes(cfg: dict) -> tuple:
+    return L.B2_CLASSES if label_rule(cfg) == "b2_raw_close" else L.CLASSES
+
+
 def build_model(cfg: dict, n_channels: int, n_stocks: int, n_sectors: int) -> nn.Module:
     m, hz = cfg["model"], tuple(cfg["protocol"]["horizons"])
     if m["family"] == "patchtst_faithful":
         return FaithfulPatchTST(n_channels=n_channels, lookback=m["lookback"], patch_len=m["patch_len"], stride=m["stride"],
                                 d_model=m["d_model"], n_heads=m["n_heads"], n_layers=m["n_layers"], d_ff=m["d_ff"],
-                                dropout=m["dropout"], attn_dropout=m["attn_dropout"], head_dropout=m["head_dropout"], horizons=hz)
+                                dropout=m["dropout"], attn_dropout=m["attn_dropout"], head_dropout=m["head_dropout"], horizons=hz,
+                                n_classes=len(classes(cfg)))
     return ProposalMultiScalePatchTST(
         n_channels=n_channels, lookback=m["lookback"], patch_lengths=m["patch_lengths"], patch_strides=m["patch_strides"],
         channel_mode=m["channel_mode"], revin=m["revin"], encoder_norm=m["encoder_norm"], d_model=m["d_model"],
         n_heads=m["n_heads"], n_layers=m["n_layers"], d_ff=m["d_ff"], dropout=m["dropout"], fusion_hidden=m["fusion_hidden"],
         n_stocks=n_stocks, d_stock=m["d_stock"], n_sectors=n_sectors, d_sector=m["d_sector"], trunk_width=m["trunk_width"],
-        head_hidden=tuple(m["head_hidden"]), head_dropout=m["head_dropout"], horizons=hz,
+        head_hidden=tuple(m["head_hidden"]), head_dropout=m["head_dropout"], horizons=hz, n_classes=len(classes(cfg)),
         price_head=m.get("price_head", True))                       # v2.06: false = no price head (ablation)
 
 
@@ -122,11 +136,11 @@ def predict(model, X, S, G, bs: int):
 
 
 def macro_f1_each(Y, P):
-    return [M.trend_metrics(Y[:, j], P[:, j].argmax(-1))["macro_f1"] for j in range(Y.shape[1])]
+    return [M.trend_metrics(Y[:, j], P[:, j].argmax(-1), P.shape[-1])["macro_f1"] for j in range(Y.shape[1])]
 
 
-def confusion(y_true, y_pred):
-    return confusion_matrix(y_true, y_pred, labels=[0, 1, 2]).tolist()
+def confusion(y_true, y_pred, n_classes: int = 3):
+    return confusion_matrix(y_true, y_pred, labels=list(range(n_classes))).tolist()
 
 
 def build_data(cfg: dict, news_path: Path, fold: dict | None = None, smoke: bool = False) -> dict:
@@ -142,6 +156,9 @@ def build_data(cfg: dict, news_path: Path, fold: dict | None = None, smoke: bool
     channels = FP.channels(cfg["inputs"])
     lookback = cfg["model"]["lookback"]
 
+    if label_rule(cfg) == "b2_raw_close":                                   # v2.08: B2 next-day label, same rows
+        data = data.copy()
+        data["y_1"], data["b2_prev"] = L.b2_next_day(full, data.index)
     tr_rows, va = data[data.split == "train"], data[data.split == "val"]
     tdates = np.sort(tr_rows.date.unique()); cut = int(len(tdates) * (1 - cfg["protocol"]["inner_es_share"]))
     fit_end, es_start = tdates[cut - 1 - cfg["protocol"]["purge"]], tdates[cut]
@@ -318,7 +335,7 @@ def train_one(cfg, seed, D, n_channels, n_stocks, n_sectors, max_epochs, save_pa
             row["gpu_peak_gb"] = round(torch.cuda.max_memory_allocated() / 2 ** 30, 2)
         hist.append(row)
         per_h = " ".join(f"{h}d {sc:.3f}{'*' if j in improved else ' '}" for j, (h, sc) in enumerate(zip(horizons(cfg), es_each)))
-        up = "/".join(f"{s[2]:.0%}" for s in diag["call_shares"])
+        up = "/".join(f"{s[-1]:.0%}" for s in diag["call_shares"])                 # last class: up (or not down, B2)
         agr = "-" if diag["agreement"] is None else "/".join(f"{a:.0%}" for a in diag["agreement"])
         notes = [x for x, on in (("best F1 so far", flags["prefix_improved"]), ("lowest CE so far", flags["ce_improved"])) if on]
         mark = (f"  <== KEPT = epoch {sel.kept_epoch} (F1 {sel.kept_f1:.4f}){' - saved' if save_path is not None else ''}"
@@ -327,12 +344,13 @@ def train_one(cfg, seed, D, n_channels, n_stocks, n_sectors, max_epochs, save_pa
         stall += f" | news blanked {row['news_blanked_share']:.0%}" if p_blank > 0 else ""
         stall += f" | price pull {gd['price_share_weighted']:.0%} cos {gd['cosine']:+.2f}" if gd is not None else ""
         print(f"    seed {seed} ep {ep:>2}: lr {lr_now:.1e} loss {tot / len(f['X']):.4f} | ES F1 {es:.4f} [{per_h}] "
-              f"CE {diag['ce_mean']:.4f} | up calls {up} same as last {agr}{stall}"
+              f"CE {diag['ce_mean']:.4f} | {classes(cfg)[-1].replace('_', '-')} calls {up} same as last {agr}{stall}"
               + (f" ({', '.join(notes)})" if notes else "") + f"{mark}  ({time.time() - t0:.0f}s"
               + (f", GPU peak {row['gpu_peak_gb']} GB" if "gpu_peak_gb" in row else "") + ")", flush=True)
         if early and STOP.should_stop(tr["stop_rule"], bad, bad_h, tr["patience"]):
             print(f"    seed {seed}: stopped after epoch {ep} - "
-                  + ("every horizon" if tr["stop_rule"] == "every" else "the 3-horizon mean")
+                  + ("every horizon" if tr["stop_rule"] == "every" else
+                     "the 3-horizon mean" if nh == 3 else "the hold-out macro-F1" if nh == 1 else f"the {nh}-horizon mean")
                   + f" went {tr['patience']} epochs without improving; weights kept from epoch {sel.kept_epoch}"
                   + ("" if shared else f" (per horizon: {best_ep_h})"), flush=True)
             break
@@ -343,7 +361,7 @@ def train_one(cfg, seed, D, n_channels, n_stocks, n_sectors, max_epochs, save_pa
     meta = {"best_epoch": sel.kept_epoch, "best_inner_es_macro_f1": round(sel.kept_f1, 4), "epochs_run": len(hist),
             "selection": tr["selection"], "weights_scored": "ema" if ema is not None else "raw",
             "best_f1_epoch_overall": sel.prefix_epoch, "best_f1_overall": round(sel.prefix_f1, 4),
-            "es_actual_shares": [(np.bincount(D["es"]["Y"][:, j], minlength=3) / len(D["es"]["Y"])).round(4).tolist() for j in range(nh)],
+            "es_actual_shares": [(np.bincount(D["es"]["Y"][:, j], minlength=len(classes(cfg))) / len(D["es"]["Y"])).round(4).tolist() for j in range(nh)],
             "history": hist, "best_epoch_per_horizon": best_ep_h, "best_inner_es_per_horizon": [round(b, 4) for b in best_h]}
     if tr["selection"] == "f1_up_to_ce_min":
         meta["ce_min_epoch"], meta["ce_min"] = sel.ce_min_epoch, round(sel.ce_min, 5)
@@ -369,7 +387,7 @@ def finish(res: dict, preds: pd.DataFrame, cfg: dict) -> None:
     columns in preds."""
     runs = res["runs"]
     summ = {}
-    hz = horizons(cfg)
+    hz, cls_names, nc = horizons(cfg), classes(cfg), len(classes(cfg))
     for h in hz:
         summ[f"h{h}"] = {k: {"mean": round(statistics.mean(r["val"][f"h{h}"][k] for r in runs), 5),
                              "std": round(statistics.stdev(r["val"][f"h{h}"][k] for r in runs), 5) if len(runs) > 1 else None}
@@ -383,17 +401,17 @@ def finish(res: dict, preds: pd.DataFrame, cfg: dict) -> None:
     ens = {"how": f"mean of the {len(runs)} seeds' kept probabilities (argmax) and return forecasts", "seeds": seeds, "val": {}}
     for h in hz:
         Y, Rv = preds[f"y_{h}"].to_numpy(), preds[f"fwd_{h}"].to_numpy(float)
-        Pm = np.mean([preds[[f"v2xx_s{sd}_p{h}_{c}" for c in L.CLASSES]].to_numpy(float) for sd in seeds], axis=0)
+        Pm = np.mean([preds[[f"v2xx_s{sd}_p{h}_{c}" for c in cls_names]].to_numpy(float) for sd in seeds], axis=0)
         has_r = all(f"v2xx_s{sd}_r{h}" in preds for sd in seeds)
         yh = Pm.argmax(-1)
-        ens["val"][f"h{h}"] = {**M.trend_metrics(Y, yh), "confusion": confusion(Y, yh)}
+        ens["val"][f"h{h}"] = {**M.trend_metrics(Y, yh, nc), "confusion": confusion(Y, yh, nc)}
         if has_r:
             rm = np.mean([preds[f"v2xx_s{sd}_r{h}"].to_numpy(float) for sd in seeds], axis=0)
             ph, pa = close_t * np.exp(rm), close_t * np.exp(Rv)
             ens["val"][f"h{h}"].update({**M.return_metrics(Rv, rm), "price_rmse_baht": round(float(np.sqrt(np.mean((ph - pa) ** 2))), 4),
                                         "price_mae_baht": round(float(np.mean(np.abs(ph - pa))), 4)})
         preds[f"v2xx_ens_class{h}"] = yh
-        for c, cls in enumerate(L.CLASSES):
+        for c, cls in enumerate(cls_names):
             preds[f"v2xx_ens_p{h}_{cls}"] = Pm[:, c].round(6)
         if has_r:
             preds[f"v2xx_ens_r{h}"] = rm.round(6)
@@ -434,16 +452,24 @@ def main(argv=None):
     print(f"rows: fit {len(fit)} / inner-ES {len(es)} / val {len(va)}; window {cfg['model']['lookback']} x {len(channels)}; "
           f"stocks {len(stock_vocab)} (+unknown), sectors {len(sec_id)} (+unknown)", flush=True)
 
+    cls_names, nc, b2 = classes(cfg), len(classes(cfg)), label_rule(cfg) == "b2_raw_close"
     floors = {}
     for j, h in enumerate(hz):
         ytr, yva = tr_rows[f"y_{h}"].to_numpy(), D["val"]["Y"][:, j]
-        past = L.classify(va[f"r_{h}"].to_numpy(), va[f"sigma_{h}"].to_numpy(), info[f"h{h}"]["k"])
-        q, pv = np.bincount(ytr, minlength=3) / len(ytr), np.bincount(yva, minlength=3) / len(yva)
+        if b2:                                   # direction of the move t-1 -> t (B2 rule); first day of a segment: majority
+            past = va["b2_prev"].to_numpy()
+            past = np.where(past < 0, M.majority_class(ytr, nc), past)
+            rev = 1 - past
+        else:
+            past = L.classify(va[f"r_{h}"].to_numpy(), va[f"sigma_{h}"].to_numpy(), info[f"h{h}"]["k"])
+            rev = 2 - past
+        q, pv = np.bincount(ytr, minlength=nc) / len(ytr), np.bincount(yva, minlength=nc) / len(yva)
         p0 = close_t; p1 = close_t * np.exp(Rva[:, j])
-        floors[f"h{h}"] = {"majority_class": M.trend_metrics(yva, np.full_like(yva, M.majority_class(ytr))),
-                           "stratified_random_expected": {"macro_f1": round(float(np.mean(2 * pv * q / (pv + q))), 4)},
-                           "trend_continues": M.trend_metrics(yva, past) | {"confusion": confusion(yva, past)},
-                           "trend_reverses": M.trend_metrics(yva, 2 - past) | {"confusion": confusion(yva, 2 - past)},
+        floors[f"h{h}"] = {"majority_class": M.trend_metrics(yva, np.full_like(yva, M.majority_class(ytr, nc)), nc),
+                           "stratified_random_expected": {"macro_f1": round(float(np.mean(2 * pv * q / (pv + q))), 4),
+                                                          "accuracy": round(float((pv * q).sum()), 4)},
+                           "trend_continues": M.trend_metrics(yva, past, nc) | {"confusion": confusion(yva, past, nc)},
+                           "trend_reverses": M.trend_metrics(yva, rev, nc) | {"confusion": confusion(yva, rev, nc)},
                            "persistence_zero_return": M.return_metrics(Rva[:, j], np.zeros(len(Rva))),
                            "persistence_price_baht": {"rmse": round(float(np.sqrt(np.mean((p1 - p0) ** 2))), 4),
                                                       "mae": round(float(np.mean(np.abs(p1 - p0))), 4)}}
@@ -466,7 +492,11 @@ def main(argv=None):
            "stock_vocab": stock_vocab, "val_rows_unknown_stock": int((D["val"]["S"] == 0).sum()),
            "inner_es": {"fit_end": str(pd.Timestamp(B["fit_end"]).date()), "es_start": str(pd.Timestamp(B["es_start"]).date()),
                         "rows_fit": len(fit), "rows_es": len(es)},
-           "data": info, "floors": floors, "part": bool(args.part), "runs": []}
+           "data": info, "floors": floors, "part": bool(args.part), "runs": [],
+           "label": {"rule": label_rule(cfg), "classes": list(cls_names),
+                     "class_shares": {k: (np.bincount(D[k]["Y"][:, 0], minlength=nc) / len(D[k]["Y"])).round(4).tolist()
+                                      for k in ("fit", "es", "val")},
+                     "train_class_shares": (np.bincount(tr_rows[f"y_{hz[0]}"].to_numpy(), minlength=nc) / len(tr_rows)).round(4).tolist()}}
     preds = va[["symbol", "date"]].reset_index(drop=True).copy()
     for j, h in enumerate(hz):
         preds[f"y_{h}"] = D["val"]["Y"][:, j]; preds[f"fwd_{h}"] = Rva[:, j]
@@ -490,7 +520,7 @@ def main(argv=None):
                 model.load_state_dict(states[j]); cache[sid] = predict(model, D["val"]["X"], D["val"]["S"], D["val"]["G"], cfg["training"]["batch_size"])
             P, R, W = cache[sid]
             yhat = P[:, j].argmax(-1)
-            per_h[f"h{h}"] = {**M.trend_metrics(D["val"]["Y"][:, j], yhat), "confusion": confusion(D["val"]["Y"][:, j], yhat),
+            per_h[f"h{h}"] = {**M.trend_metrics(D["val"]["Y"][:, j], yhat, nc), "confusion": confusion(D["val"]["Y"][:, j], yhat, nc),
                               "epoch_used": epochs_used[j]}
             if R is not None:                                        # price forecast (absent without a price head)
                 rp = R[:, j] * r_sd[j]
@@ -501,7 +531,7 @@ def main(argv=None):
                                        "price_mae_baht": round(float(np.mean(np.abs(ph - pa))), 4)})
             weights_by_h[f"h{h}"] = W
             preds[f"v2xx_s{seed}_class{h}"] = yhat
-            for c, cls in enumerate(L.CLASSES):
+            for c, cls in enumerate(cls_names):
                 preds[f"v2xx_s{seed}_p{h}_{cls}"] = P[:, j, c].round(6)
             if R is not None:
                 preds[f"v2xx_s{seed}_r{h}"] = rp.round(6)

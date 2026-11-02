@@ -41,7 +41,7 @@ def merge(a: pd.DataFrame, b: pd.DataFrame) -> pd.DataFrame:
 
 
 def f1_from_counts(cnt: np.ndarray) -> np.ndarray:
-    """cnt [..., 3, 3] (rows actual, cols predicted) -> macro-F1 [...] (classes with no support and no calls count 0,
+    """cnt [..., K, K] (rows actual, cols predicted; K = 3, or 2 for B2) -> macro-F1 [...] (classes with no support and no calls count 0,
     as sklearn's zero_division=0)."""
     tp = np.diagonal(cnt, axis1=-2, axis2=-1).astype(float)
     pred, act = cnt.sum(-2).astype(float), cnt.sum(-1).astype(float)
@@ -84,18 +84,20 @@ def fit_bias(groups: list[tuple[np.ndarray, np.ndarray]]) -> dict:
 
 
 def block_bootstrap(dates: np.ndarray, y: np.ndarray, preds: dict, pairs=(), b: int = 2000, block: int = 10,
-                    seed: int = 20261016, bar: float | None = None) -> dict:
+                    seed: int = 20261016, bar: float | None = None, n_classes: int = 3) -> dict:
     """dates [n]; y [n]; preds {name: [S, n] predicted classes (S seeds)}. Statistic = mean over seeds of macro-F1.
-    pairs: (name_a, name_b) differences a - b computed on the same resamples. Returns point values and 95% intervals."""
+    pairs: (name_a, name_b) differences a - b computed on the same resamples. Returns point values and 95% intervals.
+    n_classes 3 (default, every run before v2.08) or 2 (v2.08 B2 label); the resamples do not depend on it."""
     ud, di = np.unique(dates, return_inverse=True)
     nd = len(ud)
     counts = {}
     for k, P in preds.items():
         P = np.atleast_2d(P)
-        c = np.zeros((P.shape[0], nd, 9))
+        K = n_classes
+        c = np.zeros((P.shape[0], nd, K * K))
         for s in range(P.shape[0]):
-            np.add.at(c[s], (di, y * 3 + P[s]), 1)
-        counts[k] = c.reshape(P.shape[0], nd, 3, 3)
+            np.add.at(c[s], (di, y * K + P[s]), 1)
+        counts[k] = c.reshape(P.shape[0], nd, K, K)
     rng = np.random.default_rng(seed)
     nb = int(np.ceil(nd / block))
     starts = rng.integers(0, nd - block + 1, size=(b, nb))

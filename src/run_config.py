@@ -85,6 +85,7 @@ _INPUTS_FIXED = {
     ("inputs", "sentiment"): ["p_pos", "p_neg", "p_neu"],                                       # slide 9
     ("loss", "price_target"): "log_return",                                                     # slide 9, hard rule 1
 }
+LABEL_RULES = ("k_sigma", "b2_raw_close")   # proposal 3-class k x sigma; v2.08 B2 next-day 2-class (raw close)
 PROPOSAL_HORIZONS = [1, 5, 10]                                                                  # proposal scope 4 (slot O1)
 # Fixed by the signed proposal, the committee slides, the original paper, or earlier pre-registered protocol.
 FIXED = {
@@ -198,6 +199,15 @@ def problems(cfg: dict) -> list[str]:
     hz = cfg.get("protocol", {}).get("horizons")
     if not (isinstance(hz, list) and hz and all(h in PROPOSAL_HORIZONS for h in hz) and hz == sorted(set(hz))):
         out.append(f"protocol.horizons must be {PROPOSAL_HORIZONS} (proposal) or an increasing subset of it; the file has {hz!r}")
+    # v2.08 option (Siwat, 2026-11-03): the B2 "true data" label. Optional; absent = "k_sigma" (the proposal's label).
+    lr_ = cfg.get("protocol", {}).get("label_rule", "k_sigma")
+    if lr_ not in LABEL_RULES:
+        out.append(f"protocol.label_rule must be one of {LABEL_RULES} (got {lr_!r})")
+    elif lr_ == "b2_raw_close":
+        if hz != [1]:
+            out.append("protocol.label_rule b2_raw_close is a next-day label: protocol.horizons must be [1]")
+        if fam != "proposal_msp":
+            out.append("protocol.label_rule b2_raw_close is only built for model.family proposal_msp")
     # v2.06 option (Siwat, 2026-11-02): no price head (trend only). Optional; absent = true (a trained price head).
     ph = cfg.get("model", {}).get("price_head", True)
     if not isinstance(ph, bool):
