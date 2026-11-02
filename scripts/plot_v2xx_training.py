@@ -71,7 +71,9 @@ def plot(run_path: Path, out_path: Path | None = None) -> Path:
         raise SystemExit(f"{run_path} has no finished seeds yet")
     has_ce = "es_ce_per_horizon" in runs[0]["history"][0]
     has_grad = "grad_shared" in runs[0]["history"][0]
-    panels = ["loss", "f1"] + (["ce"] if has_ce else []) + ["rmse"] + (["agree"] if has_ce else []) + (["grad"] if has_grad else [])
+    has_price = any(e.get("es_return_rmse_std") is not None for e in runs[0]["history"])      # false without a price head
+    panels = (["loss", "f1"] + (["ce"] if has_ce else []) + (["rmse"] if has_price else []) + (["agree"] if has_ce else [])
+              + (["grad"] if has_grad else []))
     fig, axes = plt.subplots(len(runs), len(panels), figsize=(5 * len(panels), 3.6 * len(runs)), squeeze=False,
                              facecolor=SURFACE)
     name = res["config"]["name"]
@@ -112,8 +114,9 @@ def plot(run_path: Path, out_path: Path | None = None) -> Path:
             _end_label(ag, gx[-1], cos[-1], "cosine", INK2)
             ag.axhline(0, color=INK2, linewidth=1, linestyle=":")
             _style(ag, "shared layers: price share of the pull; cosine of the two tasks' gradients", "share / cosine")
-        _horizon_lines(ax["rmse"], ep, h, "es_return_rmse_std")
-        _style(ax["rmse"], "inner hold-out price RMSE (train-standardised)", "RMSE")
+        if has_price:
+            _horizon_lines(ax["rmse"], ep, h, "es_return_rmse_std")
+            _style(ax["rmse"], "inner hold-out price RMSE (train-standardised)", "RMSE")
         for a in ax.values():
             a.axvline(best, color=INK2, linewidth=1, linestyle="-", alpha=0.6)
             if ce_min and ce_min != best:

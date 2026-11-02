@@ -71,7 +71,7 @@ SCHEMA = {
         ("model", "d_stock"): (POS_INT, None),
         ("model", "d_sector"): (POS_INT, None),
         ("model", "stock_id_dropout"): (PROB, None),
-    },
+    },                                                  # model.price_head (optional, v2.06): checked in problems()
     "patchtst_faithful": COMMON | {
         ("model", "patch_len"): (POS_INT, None),
         ("model", "stride"): (POS_INT, None),
@@ -140,9 +140,12 @@ def problems(cfg: dict) -> list[str]:
         got = cfg.get(sec, {}).get(key)
         if got != want:
             out.append(f"{sec}.{key} is fixed (proposal / slides / paper) at {want!r}; the file has {got!r}")
+    no_price = cfg.get("model", {}).get("price_head") is False
     for (sec, key), (accepts, when) in SCHEMA[fam].items():
         if when is not None and cfg.get(sec, {}).get(when[0]) != when[1]:
             continue                                  # only needed with another choice
+        if no_price and (sec, key) == ("loss", "w_price"):
+            continue                                  # checked below: must be 0 without a price head
         v = cfg.get(sec, {}).get(key)
         if _blank(v):
             out.append(f"{sec}.{key}: not decided yet (accepts {accepts if isinstance(accepts, str) else ' | '.join(map(str, accepts))})")
@@ -191,6 +194,18 @@ def problems(cfg: dict) -> list[str]:
         elif nb > 0 and t.get("news_blank_unit") != "window":
             out.append("training.news_blank_unit must be 'window' when training.news_blank_p > 0 "
                        "(the whole look-back window's sentiment channels get the no-news fill)")
+    # v2.06 option (Siwat, 2026-11-02): no price head (trend only). Optional; absent = true (a trained price head).
+    ph = cfg.get("model", {}).get("price_head", True)
+    if not isinstance(ph, bool):
+        out.append(f"model.price_head = {ph!r} is not valid (accepts {BOOL})")
+    elif ph is False:
+        if fam != "proposal_msp":
+            out.append("model.price_head false is only built for model.family proposal_msp")
+        lo = cfg.get("loss", {})
+        if lo.get("weighting") != "fixed" or lo.get("w_price") != 0:
+            out.append("model.price_head false needs loss.weighting 'fixed' and loss.w_price 0 (no price loss without a price head)")
+        if t.get("grad_diagnostics") is True:
+            out.append("training.grad_diagnostics compares the two tasks, so it needs a price head")
     # v2.05 option (Siwat, 2026-10-27): per-epoch gradient diagnostic on the shared layers. Optional; absent = off.
     if "grad_diagnostics" in t and not isinstance(t["grad_diagnostics"], bool):
         out.append(f"training.grad_diagnostics = {t['grad_diagnostics']!r} is not valid (accepts {BOOL})")

@@ -84,7 +84,7 @@ class ProposalMultiScalePatchTST(nn.Module):
                  encoder_norm: str,
                  d_model: int, n_heads: int, n_layers: int, d_ff: int, dropout: float, fusion_hidden: int,
                  n_stocks: int, d_stock: int, n_sectors: int, d_sector: int, trunk_width: int, head_hidden, head_dropout: float,
-                 horizons=(1, 5, 10), n_classes: int = 3):
+                 horizons=(1, 5, 10), n_classes: int = 3, price_head: bool = True):
         super().__init__()
         if channel_mode not in CHANNEL_MODES:
             raise ValueError(f"channel_mode must be one of {CHANNEL_MODES}")
@@ -103,7 +103,9 @@ class ProposalMultiScalePatchTST(nn.Module):
         enc_out = d_model * (n_channels if channel_mode == "independent" else 1)
         self.linear = nn.Linear(enc_out + d_stock + d_sector, trunk_width)    # the single "Linear Layer" on S12/S13
         h = len(self.horizons)
-        self.price_head = mlp_head(trunk_width, head_hidden, h, head_dropout)               # [S12] -> 3 log returns
+        # [S12] -> 3 log returns. price_head=False (v2.06 ablation, Siwat 2026-11-02): no price head at all (trend only);
+        # this departs from the proposal's trained price head (L5 / L6) and is recorded as an ablation.
+        self.price_head = mlp_head(trunk_width, head_hidden, h, head_dropout) if price_head else None
         self.trend_head = mlp_head(trunk_width, head_hidden, h * n_classes, head_dropout)   # [S13] -> 9 -> (3, 3)
 
     def forward(self, x: torch.Tensor, stock: torch.Tensor, sector: torch.Tensor) -> dict:
@@ -117,7 +119,7 @@ class ProposalMultiScalePatchTST(nn.Module):
         enc = fused.reshape(B, -1)                                              # independent: concat C vectors
         z = self.linear(torch.cat([enc, self.stock_emb(stock), self.sector_emb(sector)], dim=-1))
         return {"trend_logits": self.trend_head(z).reshape(B, len(self.horizons), self.n_classes),
-                "returns": self.price_head(z),
+                "returns": self.price_head(z) if self.price_head is not None else None,
                 "scale_weights": w.reshape(B, -1, len(self.branches))}         # [B, C or 1, S]
 
 
@@ -133,6 +135,8 @@ class FixedWeightLoss(nn.Module):
 
     def forward(self, out: dict, trend: torch.Tensor, returns: torch.Tensor):
         l_cls = self.ce(out["trend_logits"].reshape(-1, out["trend_logits"].shape[-1]), trend.reshape(-1))
+        if out["returns"] is None:                                    # no price head (v2.06): trend loss only
+            return self.w_trend * l_cls, {"ce": l_cls.item()}
         l_reg = self.reg(out["returns"], returns)
         return self.w_trend * l_cls + self.w_price * l_reg, {"ce": l_cls.item(), "price": l_reg.item()}
 

@@ -22,6 +22,8 @@
   layers (everything but the two heads) on 1,024 fixed fit rows (seed + 5), in eval mode without touching .grad,
   BatchNorm statistics or any random stream, so training is unchanged. Logged: both norms, the price task's share of the
   weighted pull, and the cosine between the two gradients.
+* v2.06 option: model.price_head false (proposal_msp only): no price head and no price loss (loss.w_price 0); trend
+  only. Price metrics are then absent from the results. An ablation of the proposal's trained price head (L5 / L6).
 * Saves the weights of every seed. On a GPU, reports the peak memory per epoch and stops with a clear message if
   memory runs out.
 """
@@ -73,7 +75,8 @@ def build_model(cfg: dict, n_channels: int, n_stocks: int, n_sectors: int) -> nn
         channel_mode=m["channel_mode"], revin=m["revin"], encoder_norm=m["encoder_norm"], d_model=m["d_model"],
         n_heads=m["n_heads"], n_layers=m["n_layers"], d_ff=m["d_ff"], dropout=m["dropout"], fusion_hidden=m["fusion_hidden"],
         n_stocks=n_stocks, d_stock=m["d_stock"], n_sectors=n_sectors, d_sector=m["d_sector"], trunk_width=m["trunk_width"],
-        head_hidden=tuple(m["head_hidden"]), head_dropout=m["head_dropout"], horizons=hz)
+        head_hidden=tuple(m["head_hidden"]), head_dropout=m["head_dropout"], horizons=hz,
+        price_head=m.get("price_head", True))                       # v2.06: false = no price head (ablation)
 
 
 def param_breakdown(model: nn.Module) -> dict:
@@ -104,10 +107,11 @@ def predict(model, X, S, G, bs: int):
         for i in range(0, len(X), bs):
             o = model(_t(X[i:i + bs]), _t(S[i:i + bs]), _t(G[i:i + bs]))
             P.append(torch.softmax(o["trend_logits"], -1).cpu().numpy())      # softmax per horizon (slide 13)
-            R.append(o["returns"].cpu().numpy())
+            if o["returns"] is not None:                                  # None without a price head (v2.06)
+                R.append(o["returns"].cpu().numpy())
             if "scale_weights" in o:
                 W.append(o["scale_weights"].cpu().numpy())
-    return np.concatenate(P), np.concatenate(R), (np.concatenate(W) if W else None)
+    return np.concatenate(P), (np.concatenate(R) if R else None), (np.concatenate(W) if W else None)
 
 
 def macro_f1_each(Y, P):
@@ -270,7 +274,7 @@ def train_one(cfg, seed, D, n_channels, n_stocks, n_sectors, max_epochs, save_pa
         es = float(np.mean(es_each))
         diag = TU.holdout_diagnostics(P, e["Y"], prev_calls)
         prev_calls = diag["calls"]
-        es_rmse = [float(np.sqrt(np.mean((R[:, j] - e["R"][:, j]) ** 2))) for j in range(nh)]   # standardised units
+        es_rmse = None if R is None else [float(np.sqrt(np.mean((R[:, j] - e["R"][:, j]) ** 2))) for j in range(nh)]   # std units
         improved = STOP.update_per_horizon(best_h, bad_h, es_each)
         for j in improved:
             best_ep_h[j] = ep
@@ -296,7 +300,7 @@ def train_one(cfg, seed, D, n_channels, n_stocks, n_sectors, max_epochs, save_pa
                "es_ce_per_horizon": [round(c, 5) for c in diag["ce"]], "es_ce_mean": round(diag["ce_mean"], 5),
                "es_call_shares": [[round(x, 4) for x in s] for s in diag["call_shares"]],
                "es_call_agreement": None if diag["agreement"] is None else [round(a, 4) for a in diag["agreement"]],
-               "es_return_rmse_std": [round(s, 4) for s in es_rmse], "new_best_f1": flags["prefix_improved"],
+               "es_return_rmse_std": None if es_rmse is None else [round(s, 4) for s in es_rmse], "new_best_f1": flags["prefix_improved"],
                "new_min_ce": flags["ce_improved"], "kept_epoch": sel.kept_epoch,
                "improved_horizons": [L.HORIZONS[j] for j in improved], "stall_per_horizon": list(bad_h),
                "news_blanked_share": round(n_blanked / len(f["X"]), 4), "sec": round(time.time() - t0, 1)}
@@ -360,7 +364,8 @@ def finish(res: dict, preds: pd.DataFrame, cfg: dict) -> None:
     for h in L.HORIZONS:
         summ[f"h{h}"] = {k: {"mean": round(statistics.mean(r["val"][f"h{h}"][k] for r in runs), 5),
                              "std": round(statistics.stdev(r["val"][f"h{h}"][k] for r in runs), 5) if len(runs) > 1 else None}
-                         for k in ("macro_f1", "accuracy", "rmse", "mae", "r2_os_vs_zero", "price_rmse_baht", "price_mae_baht")}
+                         for k in ("macro_f1", "accuracy", "rmse", "mae", "r2_os_vs_zero", "price_rmse_baht", "price_mae_baht")
+                         if all(k in r["val"][f"h{h}"] for r in runs)}                  # no price keys without a price head
     res["summary"] = M.report(summ, res["floors"])
     if not (cfg["report"]["seed_ensemble"] and len(runs) > 1):     # reported alongside the per-seed mean +- std
         return
@@ -370,16 +375,19 @@ def finish(res: dict, preds: pd.DataFrame, cfg: dict) -> None:
     for h in L.HORIZONS:
         Y, Rv = preds[f"y_{h}"].to_numpy(), preds[f"fwd_{h}"].to_numpy(float)
         Pm = np.mean([preds[[f"v2xx_s{sd}_p{h}_{c}" for c in L.CLASSES]].to_numpy(float) for sd in seeds], axis=0)
-        rm = np.mean([preds[f"v2xx_s{sd}_r{h}"].to_numpy(float) for sd in seeds], axis=0)
+        has_r = all(f"v2xx_s{sd}_r{h}" in preds for sd in seeds)
         yh = Pm.argmax(-1)
-        ph, pa = close_t * np.exp(rm), close_t * np.exp(Rv)
-        ens["val"][f"h{h}"] = {**M.trend_metrics(Y, yh), "confusion": confusion(Y, yh), **M.return_metrics(Rv, rm),
-                               "price_rmse_baht": round(float(np.sqrt(np.mean((ph - pa) ** 2))), 4),
-                               "price_mae_baht": round(float(np.mean(np.abs(ph - pa))), 4)}
+        ens["val"][f"h{h}"] = {**M.trend_metrics(Y, yh), "confusion": confusion(Y, yh)}
+        if has_r:
+            rm = np.mean([preds[f"v2xx_s{sd}_r{h}"].to_numpy(float) for sd in seeds], axis=0)
+            ph, pa = close_t * np.exp(rm), close_t * np.exp(Rv)
+            ens["val"][f"h{h}"].update({**M.return_metrics(Rv, rm), "price_rmse_baht": round(float(np.sqrt(np.mean((ph - pa) ** 2))), 4),
+                                        "price_mae_baht": round(float(np.mean(np.abs(ph - pa))), 4)})
         preds[f"v2xx_ens_class{h}"] = yh
         for c, cls in enumerate(L.CLASSES):
             preds[f"v2xx_ens_p{h}_{cls}"] = Pm[:, c].round(6)
-        preds[f"v2xx_ens_r{h}"] = rm.round(6)
+        if has_r:
+            preds[f"v2xx_ens_r{h}"] = rm.round(6)
     res["seed_ensemble"] = ens
     print("  seed ensemble: " + "  ".join(f"h{h} F1 {ens['val'][f'h{h}']['macro_f1']:.3f}" for h in L.HORIZONS), flush=True)
 
@@ -472,19 +480,21 @@ def main(argv=None):
                 model.load_state_dict(states[j]); cache[sid] = predict(model, D["val"]["X"], D["val"]["S"], D["val"]["G"], cfg["training"]["batch_size"])
             P, R, W = cache[sid]
             yhat = P[:, j].argmax(-1)
-            rp = R[:, j] * r_sd[j]
-            ph, pa = close_t * np.exp(rp), close_t * np.exp(Rva[:, j])
             per_h[f"h{h}"] = {**M.trend_metrics(D["val"]["Y"][:, j], yhat), "confusion": confusion(D["val"]["Y"][:, j], yhat),
-                              **M.return_metrics(Rva[:, j], rp),
-                              "corr_with_outcome": round(float(np.corrcoef(rp, Rva[:, j])[0, 1]), 4) if np.std(rp) > 0 else None,
-                              "price_rmse_baht": round(float(np.sqrt(np.mean((ph - pa) ** 2))), 4),
-                              "price_mae_baht": round(float(np.mean(np.abs(ph - pa))), 4),
                               "epoch_used": epochs_used[j]}
+            if R is not None:                                        # price forecast (absent without a price head)
+                rp = R[:, j] * r_sd[j]
+                ph, pa = close_t * np.exp(rp), close_t * np.exp(Rva[:, j])
+                per_h[f"h{h}"].update({**M.return_metrics(Rva[:, j], rp),
+                                       "corr_with_outcome": round(float(np.corrcoef(rp, Rva[:, j])[0, 1]), 4) if np.std(rp) > 0 else None,
+                                       "price_rmse_baht": round(float(np.sqrt(np.mean((ph - pa) ** 2))), 4),
+                                       "price_mae_baht": round(float(np.mean(np.abs(ph - pa))), 4)})
             weights_by_h[f"h{h}"] = W
             preds[f"v2xx_s{seed}_class{h}"] = yhat
             for c, cls in enumerate(L.CLASSES):
                 preds[f"v2xx_s{seed}_p{h}_{cls}"] = P[:, j, c].round(6)
-            preds[f"v2xx_s{seed}_r{h}"] = rp.round(6)
+            if R is not None:
+                preds[f"v2xx_s{seed}_r{h}"] = rp.round(6)
         run = {"seed": seed, "seconds": round(time.time() - t0, 1), "params": param_breakdown(model), **meta, "val": per_h}
         W = weights_by_h["h1"]                                       # scale weights of the horizon-1 checkpoint
         if W is not None:
@@ -495,7 +505,8 @@ def main(argv=None):
                     scale_w[g] = [round(float(v), 4) for v in W[:, idx, :].mean(axis=(0, 1))]
             run[f"scale_weights_mean (patch {cfg['model']['patch_lengths']}; horizon-1 checkpoint)"] = scale_w
         res["runs"].append(run)
-        print(f"  seed {seed}: " + "  ".join(f"h{h} F1 {per_h[f'h{h}']['macro_f1']:.3f} R2 {per_h[f'h{h}']['r2_os_vs_zero']:+.4f}"
+        print(f"  seed {seed}: " + "  ".join(f"h{h} F1 {per_h[f'h{h}']['macro_f1']:.3f}"
+                                          + (f" R2 {per_h[f'h{h}']['r2_os_vs_zero']:+.4f}" if "r2_os_vs_zero" in per_h[f"h{h}"] else "")
                                           for h in L.HORIZONS), flush=True)
         out_path.write_text(json.dumps(res, indent=2, default=str), encoding="utf-8")
         preds.to_csv(pred_path, index=False)
