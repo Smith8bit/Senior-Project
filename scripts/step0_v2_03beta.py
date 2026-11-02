@@ -246,7 +246,7 @@ def predict(args):
         models[seed] = {"nets": nets, "which": which, "sha256": sha(wf)[:16], "epochs_used": ck["epochs_used"],
                         "sym2s": {s: i + 1 for i, s in enumerate(ck["stock_vocab"])},
                         "sym2g": dict(zip(sectors.symbol, sectors.sector.map(ck["sector_ids"])))}
-        say(f"  seed {seed}: {len(uniq)} distinct state(s) for the 3 horizons; epochs used {ck['epochs_used']}")
+        say(f"  seed {seed}: {len(uniq)} distinct state(s) for the {len(HS)} horizon(s); epochs used {ck['epochs_used']}")
 
     lookback, bs = cfg["model"]["lookback"], cfg["training"]["batch_size"]
     specs = part_specs(B)
@@ -565,7 +565,7 @@ def analyze(args):
         es_here = [round(f1(ye, probs(es, "v2xx", s, h).argmax(1)), 4) for s in seeds]
         es_run = [next(e for e in r["history"] if e["epoch"] == r["best_epoch"])["es_per_horizon"][j] for r in run["runs"]]
         rep[f"h{h}"] = {"val_max_abs_prob_diff": round(dp, 7), "es_f1_here": es_here, "es_f1_run": es_run}
-        ok &= dp <= FV.REPRO_PROB_TOL and (args.smoke_rows or max(abs(a - b) for a, b in zip(es_here, es_run)) <= FV.REPRO_F1_TOL)
+        ok &= bool(dp <= FV.REPRO_PROB_TOL and (args.smoke_rows or max(abs(a - b) for a, b in zip(es_here, es_run)) <= FV.REPRO_F1_TOL))
     res["reproduction"] = rep | {"ok": bool(ok)}
     say("REPRODUCTION (predictions here vs the training run): " + "; ".join(
         f"h{h} val |dp| {rep[f'h{h}']['val_max_abs_prob_diff']:.1e}, hold-out F1 {rep[f'h{h}']['es_f1_here']} vs {rep[f'h{h}']['es_f1_run']}" for h in HS))
@@ -588,7 +588,7 @@ def analyze(args):
             cf[h][k] = statistics.mean(f1(y, c) for c in C)
         cf[h]["blend_rank"] = statistics.mean(f1(y, c) for c in np.concatenate([on_a["blend_mix"][0], on_b["blend_mix"][0]], axis=1))
         cf[h]["blend_em"] = statistics.mean(f1(y, c) for c in np.concatenate([on_a_em["blend_mix"][0], on_b_em["blend_mix"][0]], axis=1))
-    mean3 = {k: statistics.mean(cf[h][k] for h in HS) for k in cf[1]}
+    mean3 = {k: statistics.mean(cf[h][k] for h in HS) for k in cf[HS[0]]}
     mix = "rank" if mean3["rank"] >= mean3["em"] else "em"
     w = {h: choose_w(es, seeds, h) for h in HS}
     res["inner_holdout_cross_fitted"] = {"per_horizon": {f"h{h}": {k: round(v, 4) for k, v in cf[h].items()} for h in HS},
@@ -704,6 +704,8 @@ def main(argv=None):
     args = ap.parse_args(argv)
     globals()["NAME"] = args.label
     rj = Path(args.run_json)
+    if rj.exists():                                        # the run's horizons: (1, 5, 10), or a subset (v2.07: (1,))
+        globals()["HS"] = tuple(json.loads(rj.read_text(encoding="utf-8"))["config"]["protocol"]["horizons"])
     args.weights = args.weights or str(rj.with_name(rj.stem + "_weights"))
     stages = ["prepare", "predict", "trees", "analyze"] if args.stage == "all" else [args.stage]
     import importlib.util

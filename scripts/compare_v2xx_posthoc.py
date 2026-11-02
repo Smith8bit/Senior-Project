@@ -16,9 +16,12 @@ Adopt rules (pre-registered by Siwat; judged on the RAW models, the training cha
     (a) validation, news on: new 3-horizon mean macro-F1 (seed mean) > base's;
     (b) price R2_OS (seed mean from the run JSON, mean of the 3 horizons): new >= base;
     (c) validation, news blanked: the paired 95% interval of new - base (3-horizon mean) is not entirely below 0.
+  h1_up_significant (v2.07, 2026-11-02; claude/log-entry-2026-11-02-v2-07-design.md):
+    (a) validation, news on, 1-day horizon: the paired 95% interval of new - base macro-F1 (seed mean) is entirely above 0.
   trend_up_significant (v2.06, 2026-11-02; claude/log-entry-2026-11-02-v2-06-design.md):
     (a) validation, news on: the paired 95% interval of new - base (3-horizon mean) is entirely above 0;
     (b) validation, news blanked: the paired 95% interval of new - base (3-horizon mean) is not entirely below 0.
+Only the horizons both models predict are compared (v2.07 predicts the 1-day horizon only).
 Intervals: 10-day date blocks, 2,000 resamples, one set of resamples shared by every horizon, model and condition
 (the same scheme as src/posthoc.block_bootstrap). 2026 is a seen window: reported, never used.
 """
@@ -141,16 +144,21 @@ def main(argv=None):
     ap.add_argument("--new", required=True, help="post-hoc folder of the new model (e.g. results/v2_04_posthoc)")
     ap.add_argument("--out", required=True)
     ap.add_argument("--rule", default="blanked_up_news_on_held",
-                    choices=("blanked_up_news_on_held", "trend_up_price_held", "trend_up_significant"))
+                    choices=("blanked_up_news_on_held", "trend_up_price_held", "trend_up_significant", "h1_up_significant"))
     ap.add_argument("--base-run", default=None, help="run JSON of the reference model (price R2_OS; rule trend_up_price_held)")
     ap.add_argument("--new-run", default=None, help="run JSON of the new model")
     a = ap.parse_args(argv)
     if a.rule == "trend_up_price_held" and not (a.base_run and a.new_run):
         ap.error("--rule trend_up_price_held needs --base-run and --new-run (price R2_OS)")
+    hb = [int(k[1:]) for k in json.loads((Path(a.base) / "step0.json").read_text(encoding="utf-8"))["validation"]]
+    hn = [int(k[1:]) for k in json.loads((Path(a.new) / "step0.json").read_text(encoding="utf-8"))["validation"]]
+    globals()["HS"] = tuple(h for h in (1, 5, 10) if h in hb and h in hn)
+    if a.rule == "h1_up_significant" and 1 not in HS:
+        ap.error("rule h1_up_significant needs the 1-day horizon in both models")
     base, new = load(Path(a.base)), load(Path(a.new))
     res = {"computed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "base": base["model"], "new": new["model"],
            "blend_w": {"base": base["w"], "new": new["w"]}, "rule_name": a.rule,
-           "rule": __doc__.split(f"  {a.rule} ")[1].split("\n  blanked_up")[0].split("\n  trend_up")[0].split("Intervals")[0].strip()}
+           "rule": __doc__.split(f"  {a.rule} ")[1].split("\n  blanked_up")[0].split("\n  trend_up")[0].split("\n  h1_up")[0].split("\nOnly the horizons")[0].split("Intervals")[0].strip()}
     price = {}
     for name, path in (("base", a.base_run), ("new", a.new_run)):
         if path:
@@ -169,6 +177,11 @@ def main(argv=None):
         a2 = v["new_minus_base"]["news_on/raw"]["ci95"][1] >= 0
         res["adopt"] = {"adopted": bool(a1 and a2), "a_blanked_mean_up": bool(a1), "b_news_on_not_below": bool(a2)}
         verdict = f"(a) blanked mean up: {a1}; (b) news-on not below (interval upper end >= 0): {a2}"
+    elif a.rule == "h1_up_significant":
+        d1 = v["new_minus_base"]["news_on/raw"]["per_horizon"]["h1"]
+        a1 = d1["ci95"][0] > 0
+        res["adopt"] = {"adopted": bool(a1), "a_h1_news_on_interval_above_0": bool(a1)}
+        verdict = f"(a) 1-day news-on gain {d1['point']:+.4f}, interval {d1['ci95']} entirely above 0: {a1}"
     elif a.rule == "trend_up_significant":
         a1 = v["new_minus_base"]["news_on/raw"]["ci95"][0] > 0
         a2 = v["new_minus_base"]["news_blanked/raw"]["ci95"][1] >= 0
@@ -188,7 +201,7 @@ def main(argv=None):
 
     print(f"\n{new['model']} vs {base['model']} (validation macro-F1, seed mean; blend w {new['model']} {list(new['w'].values())}, "
           f"{base['model']} {list(base['w'].values())})")
-    print(f"{'':28s}{'1 d':>8s}{'5 d':>8s}{'10 d':>8s}{'mean':>8s}   new - base, 3-horizon mean (95% interval)")
+    print(f"{'':28s}" + "".join(f"{f'{h} d':>8s}" for h in HS) + f"{'mean':>8s}   new - base, mean over {len(HS)} horizon(s) (95% interval)")
     for c in ("news_on", "news_blanked"):
         for k in ("raw", "ts_blend"):
             for n, M in (("base", base), ("new", new)):
@@ -204,7 +217,7 @@ def main(argv=None):
                   + f"{price[name]['r2_os_mean3']:+8.4f}")
     print(f"\nADOPT RULE {a.rule}: {verdict} -> {'ADOPTED' if res['adopt']['adopted'] else 'not adopted'}")
     f = res["forward_2026_seen"]
-    print("2026 (seen window, reported only), raw 3-horizon mean: " + "; ".join(
+    print(f"2026 (seen window, reported only), raw mean over {len(HS)} horizon(s): " + "; ".join(
         f"{c} {base['model']} {f[f'base/{c}/raw']['mean3']:.4f} -> {new['model']} {f[f'new/{c}/raw']['mean3']:.4f}" for c in ("news_on", "news_blanked")))
     print(f"wrote {a.out}")
 

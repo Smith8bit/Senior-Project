@@ -24,6 +24,8 @@
   weighted pull, and the cosine between the two gradients.
 * v2.06 option: model.price_head false (proposal_msp only): no price head and no price loss (loss.w_price 0); trend
   only. Price metrics are then absent from the results. An ablation of the proposal's trained price head (L5 / L6).
+* v2.07 option: protocol.horizons may be a subset of [1, 5, 10] (an ablation of proposal O1); every array, metric
+  and file then covers only those horizons, and the kept epoch is chosen on their mean hold-out macro-F1.
 * Saves the weights of every seed. On a GPU, reports the peak memory per epoch and stops with a clear message if
   memory runs out.
 """
@@ -62,6 +64,11 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 NEWS_FILE = "data/derived/sentiment_scores.csv"
 SMOKE = dict(fit=3000, es=800, val=1500, max_epochs=2)          # --smoke: pipeline check only, never a result
 GRAD_DIAG_ROWS = 1024                                           # v2.05 diagnostic: fixed fit rows per measurement
+
+
+def horizons(cfg: dict) -> tuple:
+    """The config's trend horizons: (1, 5, 10) as in the proposal, or a subset for an ablation (v2.07: (1,))."""
+    return tuple(cfg["protocol"]["horizons"])
 
 
 def build_model(cfg: dict, n_channels: int, n_stocks: int, n_sectors: int) -> nn.Module:
@@ -146,7 +153,8 @@ def build_data(cfg: dict, news_path: Path, fold: dict | None = None, smoke: bool
 
     z = SQ.standardise_full(full, channels, tr_rows.index)                    # "normalised": train rows only
     missing = {c: round(float(full.loc[tr_rows.index, c].isna().mean()), 4) for c in channels}   # training rows only
-    r_sd = tr_rows[[f"fwd_{h}" for h in L.HORIZONS]].std().to_numpy()       # price target scale, train only
+    hz = horizons(cfg)
+    r_sd = tr_rows[[f"fwd_{h}" for h in hz]].std().to_numpy()               # price target scale, train only
     stock_vocab = sorted(fit.symbol.unique())                                # ids 1..n; no fit rows -> 0 (unknown)
     sym2s = {s: i + 1 for i, s in enumerate(stock_vocab)}
     sectors = pd.read_csv(ROOT / "data/sectors.csv")
@@ -160,8 +168,8 @@ def build_data(cfg: dict, news_path: Path, fold: dict | None = None, smoke: bool
     D = {"news_blank": news_blank}
     for k, d in (("fit", fit), ("es", es), ("val", va)):
         D[k] = {"X": SQ.windows(full, z, d.index, lookback),
-                "Y": d[[f"y_{h}" for h in L.HORIZONS]].to_numpy(np.int64),
-                "R": (d[[f"fwd_{h}" for h in L.HORIZONS]].to_numpy() / r_sd).astype(np.float32),
+                "Y": d[[f"y_{h}" for h in hz]].to_numpy(np.int64),
+                "R": (d[[f"fwd_{h}" for h in hz]].to_numpy() / r_sd).astype(np.float32),
                 "S": d.symbol.map(sym2s).fillna(0).to_numpy(np.int64),
                 "G": d.symbol.map(sym2g).fillna(0).to_numpy(np.int64),
                 "date": d.date.to_numpy(), "symbol": d.symbol.to_numpy()}
@@ -302,14 +310,14 @@ def train_one(cfg, seed, D, n_channels, n_stocks, n_sectors, max_epochs, save_pa
                "es_call_agreement": None if diag["agreement"] is None else [round(a, 4) for a in diag["agreement"]],
                "es_return_rmse_std": None if es_rmse is None else [round(s, 4) for s in es_rmse], "new_best_f1": flags["prefix_improved"],
                "new_min_ce": flags["ce_improved"], "kept_epoch": sel.kept_epoch,
-               "improved_horizons": [L.HORIZONS[j] for j in improved], "stall_per_horizon": list(bad_h),
+               "improved_horizons": [horizons(cfg)[j] for j in improved], "stall_per_horizon": list(bad_h),
                "news_blanked_share": round(n_blanked / len(f["X"]), 4), "sec": round(time.time() - t0, 1)}
         if gd is not None:
             row["grad_shared"] = gd
         if torch.cuda.is_available():
             row["gpu_peak_gb"] = round(torch.cuda.max_memory_allocated() / 2 ** 30, 2)
         hist.append(row)
-        per_h = " ".join(f"{h}d {sc:.3f}{'*' if j in improved else ' '}" for j, (h, sc) in enumerate(zip(L.HORIZONS, es_each)))
+        per_h = " ".join(f"{h}d {sc:.3f}{'*' if j in improved else ' '}" for j, (h, sc) in enumerate(zip(horizons(cfg), es_each)))
         up = "/".join(f"{s[2]:.0%}" for s in diag["call_shares"])
         agr = "-" if diag["agreement"] is None else "/".join(f"{a:.0%}" for a in diag["agreement"])
         notes = [x for x, on in (("best F1 so far", flags["prefix_improved"]), ("lowest CE so far", flags["ce_improved"])) if on]
@@ -361,7 +369,8 @@ def finish(res: dict, preds: pd.DataFrame, cfg: dict) -> None:
     columns in preds."""
     runs = res["runs"]
     summ = {}
-    for h in L.HORIZONS:
+    hz = horizons(cfg)
+    for h in hz:
         summ[f"h{h}"] = {k: {"mean": round(statistics.mean(r["val"][f"h{h}"][k] for r in runs), 5),
                              "std": round(statistics.stdev(r["val"][f"h{h}"][k] for r in runs), 5) if len(runs) > 1 else None}
                          for k in ("macro_f1", "accuracy", "rmse", "mae", "r2_os_vs_zero", "price_rmse_baht", "price_mae_baht")
@@ -372,7 +381,7 @@ def finish(res: dict, preds: pd.DataFrame, cfg: dict) -> None:
     seeds = [r["seed"] for r in runs]
     close_t = preds["close_t"].to_numpy(float)
     ens = {"how": f"mean of the {len(runs)} seeds' kept probabilities (argmax) and return forecasts", "seeds": seeds, "val": {}}
-    for h in L.HORIZONS:
+    for h in hz:
         Y, Rv = preds[f"y_{h}"].to_numpy(), preds[f"fwd_{h}"].to_numpy(float)
         Pm = np.mean([preds[[f"v2xx_s{sd}_p{h}_{c}" for c in L.CLASSES]].to_numpy(float) for sd in seeds], axis=0)
         has_r = all(f"v2xx_s{sd}_r{h}" in preds for sd in seeds)
@@ -389,7 +398,7 @@ def finish(res: dict, preds: pd.DataFrame, cfg: dict) -> None:
         if has_r:
             preds[f"v2xx_ens_r{h}"] = rm.round(6)
     res["seed_ensemble"] = ens
-    print("  seed ensemble: " + "  ".join(f"h{h} F1 {ens['val'][f'h{h}']['macro_f1']:.3f}" for h in L.HORIZONS), flush=True)
+    print("  seed ensemble: " + "  ".join(f"h{h} F1 {ens['val'][f'h{h}']['macro_f1']:.3f}" for h in hz), flush=True)
 
 
 def main(argv=None):
@@ -419,13 +428,14 @@ def main(argv=None):
     B = build_data(cfg, ROOT / args.news, BT.fold_arg(args), args.smoke)
     D, channels, info, va, tr_rows, r_sd = B["D"], B["channels"], B["info"], B["va"], B["tr_rows"], B["r_sd"]
     fit, es, stock_vocab, sec_id = B["fit"], B["es"], B["stock_vocab"], B["sec_id"]
-    Rva = va[[f"fwd_{h}" for h in L.HORIZONS]].to_numpy()
+    hz = horizons(cfg)
+    Rva = va[[f"fwd_{h}" for h in hz]].to_numpy()
     close_t = va["close"].to_numpy(float)                                    # raw close on day t
     print(f"rows: fit {len(fit)} / inner-ES {len(es)} / val {len(va)}; window {cfg['model']['lookback']} x {len(channels)}; "
           f"stocks {len(stock_vocab)} (+unknown), sectors {len(sec_id)} (+unknown)", flush=True)
 
     floors = {}
-    for j, h in enumerate(L.HORIZONS):
+    for j, h in enumerate(hz):
         ytr, yva = tr_rows[f"y_{h}"].to_numpy(), D["val"]["Y"][:, j]
         past = L.classify(va[f"r_{h}"].to_numpy(), va[f"sigma_{h}"].to_numpy(), info[f"h{h}"]["k"])
         q, pv = np.bincount(ytr, minlength=3) / len(ytr), np.bincount(yva, minlength=3) / len(yva)
@@ -458,7 +468,7 @@ def main(argv=None):
                         "rows_fit": len(fit), "rows_es": len(es)},
            "data": info, "floors": floors, "part": bool(args.part), "runs": []}
     preds = va[["symbol", "date"]].reset_index(drop=True).copy()
-    for j, h in enumerate(L.HORIZONS):
+    for j, h in enumerate(hz):
         preds[f"y_{h}"] = D["val"]["Y"][:, j]; preds[f"fwd_{h}"] = Rva[:, j]
     preds["close_t"] = close_t
     groups = FP.groups(cfg["inputs"])
@@ -474,7 +484,7 @@ def main(argv=None):
                     "epochs_used": epochs_used, "states": [{k: v.cpu() for k, v in s.items()} for s in states]},
                    wdir / f"seed{seed}.pt")
         per_h, cache, weights_by_h = {}, {}, {}
-        for j, h in enumerate(L.HORIZONS):
+        for j, h in enumerate(hz):
             sid = id(states[j])
             if sid not in cache:
                 model.load_state_dict(states[j]); cache[sid] = predict(model, D["val"]["X"], D["val"]["S"], D["val"]["G"], cfg["training"]["batch_size"])
@@ -507,7 +517,7 @@ def main(argv=None):
         res["runs"].append(run)
         print(f"  seed {seed}: " + "  ".join(f"h{h} F1 {per_h[f'h{h}']['macro_f1']:.3f}"
                                           + (f" R2 {per_h[f'h{h}']['r2_os_vs_zero']:+.4f}" if "r2_os_vs_zero" in per_h[f"h{h}"] else "")
-                                          for h in L.HORIZONS), flush=True)
+                                          for h in hz), flush=True)
         out_path.write_text(json.dumps(res, indent=2, default=str), encoding="utf-8")
         preds.to_csv(pred_path, index=False)
 

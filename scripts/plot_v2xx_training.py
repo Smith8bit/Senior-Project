@@ -33,7 +33,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.ticker import MaxNLocator  # noqa: E402
 
 SURFACE, INK, INK2, GRID = "#fcfcfb", "#0b0b0b", "#52514e", "#e4e3df"
-HORIZON = {"1 d": "#2a78d6", "5 d": "#eb6834", "10 d": "#1baf7a"}
+HORIZON = {"1 d": "#2a78d6", "5 d": "#eb6834", "10 d": "#1baf7a"}     # each horizon keeps its colour across runs
 CLASS = {"down": "#eda100", "flat": "#e87ba4", "up": "#008300"}   # validated (palette slots 4-6); labelled at line ends
 
 
@@ -55,8 +55,14 @@ def _end_label(ax, x, y, text, color):
     ax.plot([x], [y], marker="o", markersize=4, color=color)
 
 
-def _horizon_lines(ax, ep, h, key):
-    for j, (lab, col) in enumerate(HORIZON.items()):
+def horizon_colours(res: dict) -> dict:
+    """{label: colour} for the run's horizons, in model output order (v2.07 predicts the 1-day horizon only)."""
+    hz = res["config"].get("protocol", {}).get("horizons", [1, 5, 10])
+    return {f"{h} d": HORIZON[f"{h} d"] for h in hz}
+
+
+def _horizon_lines(ax, ep, h, key, hc):
+    for j, (lab, col) in enumerate(hc.items()):
         pts = [(x, e[key][j]) for x, e in zip(ep, h) if e.get(key) is not None]
         if pts:
             xs, ys = zip(*pts)
@@ -77,6 +83,7 @@ def plot(run_path: Path, out_path: Path | None = None) -> Path:
     fig, axes = plt.subplots(len(runs), len(panels), figsize=(5 * len(panels), 3.6 * len(runs)), squeeze=False,
                              facecolor=SURFACE)
     name = res["config"]["name"]
+    hc = horizon_colours(res)
     for r, run in enumerate(runs):
         h = run["history"]
         ep = [e["epoch"] for e in h]
@@ -93,14 +100,14 @@ def plot(run_path: Path, out_path: Path | None = None) -> Path:
         _end_label(a0, ep[-1], ce[-1], "trend", INK)
         kept_note = f"kept epoch {best}" + (f" · lowest CE epoch {ce_min}" if ce_min else "")
         _style(a0, f"seed {run['seed']} · {kept_note}\ntraining loss by task", "loss")
-        _horizon_lines(ax["f1"], ep, h, "es_per_horizon")
+        _horizon_lines(ax["f1"], ep, h, "es_per_horizon", hc)
         ax["f1"].axhline(1 / 3, color=INK2, linewidth=1, linestyle=":")
         _style(ax["f1"], "inner hold-out macro-F1 (selection signal)", "macro-F1")
         if has_ce:
-            _horizon_lines(ax["ce"], ep, h, "es_ce_per_horizon")
+            _horizon_lines(ax["ce"], ep, h, "es_ce_per_horizon", hc)
             ax["ce"].axhline(math.log(3), color=INK2, linewidth=1, linestyle=":")
             _style(ax["ce"], "inner hold-out cross-entropy (uniform guess = ln 3)", "cross-entropy")
-            _horizon_lines(ax["agree"], ep, h, "es_call_agreement")
+            _horizon_lines(ax["agree"], ep, h, "es_call_agreement", hc)
             _style(ax["agree"], "hold-out calls unchanged from previous epoch", "share")
         if has_grad:
             g0 = run.get("grad_shared_before_training")
@@ -115,7 +122,7 @@ def plot(run_path: Path, out_path: Path | None = None) -> Path:
             ag.axhline(0, color=INK2, linewidth=1, linestyle=":")
             _style(ag, "shared layers: price share of the pull; cosine of the two tasks' gradients", "share / cosine")
         if has_price:
-            _horizon_lines(ax["rmse"], ep, h, "es_return_rmse_std")
+            _horizon_lines(ax["rmse"], ep, h, "es_return_rmse_std", hc)
             _style(ax["rmse"], "inner hold-out price RMSE (train-standardised)", "RMSE")
         for a in ax.values():
             a.axvline(best, color=INK2, linewidth=1, linestyle="-", alpha=0.6)
@@ -125,7 +132,7 @@ def plot(run_path: Path, out_path: Path | None = None) -> Path:
     fig.suptitle(f"{name} — learning curves (validation block not used during training)", x=0.01, ha="left",
                  fontsize=12, color=INK)
     from matplotlib.lines import Line2D
-    handles = [Line2D([], [], color=c, linewidth=2, label=l) for l, c in HORIZON.items()]
+    handles = [Line2D([], [], color=c, linewidth=2, label=l) for l, c in hc.items()]
     handles += [Line2D([], [], color=INK2, linewidth=1, linestyle=":", label="chance (1/3) / uniform guess (ln 3)"),
                 Line2D([], [], color=INK, linewidth=2, label="trend loss (cross-entropy)"),
                 Line2D([], [], color=INK2, linewidth=2, linestyle="--", label="price loss (MSE)"),
@@ -147,12 +154,13 @@ def plot_calls(run_path: Path, out_path: Path | None = None) -> Path | None:
     runs = res["runs"]
     if not runs or "es_call_shares" not in runs[0]["history"][0]:
         return None
-    fig, axes = plt.subplots(len(runs), len(HORIZON), figsize=(15, 3.4 * len(runs)), squeeze=False, facecolor=SURFACE)
+    hc = horizon_colours(res)
+    fig, axes = plt.subplots(len(runs), len(hc), figsize=(5 * len(hc), 3.4 * len(runs)), squeeze=False, facecolor=SURFACE)
     for r, run in enumerate(runs):
         h = run["history"]
         ep = [e["epoch"] for e in h]
         actual = run.get("es_actual_shares")
-        for j, hz in enumerate(HORIZON):
+        for j, hz in enumerate(hc):
             a = axes[r][j]
             for c, (cls, col) in enumerate(CLASS.items()):
                 y = [e["es_call_shares"][j][c] for e in h]

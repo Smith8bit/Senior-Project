@@ -84,8 +84,8 @@ _INPUTS_FIXED = {
     ("inputs", "indicators"): ["sma", "ema", "rsi", "macd", "bb_pctb", "adx"],                  # proposal scope 2
     ("inputs", "sentiment"): ["p_pos", "p_neg", "p_neu"],                                       # slide 9
     ("loss", "price_target"): "log_return",                                                     # slide 9, hard rule 1
-    ("protocol", "horizons"): [1, 5, 10],                                                       # proposal scope 4
 }
+PROPOSAL_HORIZONS = [1, 5, 10]                                                                  # proposal scope 4 (slot O1)
 # Fixed by the signed proposal, the committee slides, the original paper, or earlier pre-registered protocol.
 FIXED = {
     "proposal_msp": _INPUTS_FIXED | {
@@ -194,6 +194,10 @@ def problems(cfg: dict) -> list[str]:
         elif nb > 0 and t.get("news_blank_unit") != "window":
             out.append("training.news_blank_unit must be 'window' when training.news_blank_p > 0 "
                        "(the whole look-back window's sentiment channels get the no-news fill)")
+    # proposal horizons [1, 5, 10]; v2.07 (Siwat, 2026-11-02) allows an increasing subset as an ablation of slot O1
+    hz = cfg.get("protocol", {}).get("horizons")
+    if not (isinstance(hz, list) and hz and all(h in PROPOSAL_HORIZONS for h in hz) and hz == sorted(set(hz))):
+        out.append(f"protocol.horizons must be {PROPOSAL_HORIZONS} (proposal) or an increasing subset of it; the file has {hz!r}")
     # v2.06 option (Siwat, 2026-11-02): no price head (trend only). Optional; absent = true (a trained price head).
     ph = cfg.get("model", {}).get("price_head", True)
     if not isinstance(ph, bool):
