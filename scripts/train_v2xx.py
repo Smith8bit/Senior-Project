@@ -18,6 +18,10 @@
   that probability, gets the no-news fill on every day of its sentiment channels (own random stream, seed + 3).
   BatchNorm statistics are recomputed on the fit rows with the same blanking rate and a fixed mask (seed + 4).
   Hold-out and validation are always scored with the news as it is.
+* v2.05 option: training.grad_diagnostics. Before training and after every epoch, each task's gradient on the shared
+  layers (everything but the two heads) on 1,024 fixed fit rows (seed + 5), in eval mode without touching .grad,
+  BatchNorm statistics or any random stream, so training is unchanged. Logged: both norms, the price task's share of the
+  weighted pull, and the cosine between the two gradients.
 * Saves the weights of every seed. On a GPU, reports the peak memory per epoch and stops with a clear message if
   memory runs out.
 """
@@ -55,6 +59,7 @@ from proposal_model import ProposalMultiScalePatchTST, make_loss  # noqa: E402
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 NEWS_FILE = "data/derived/sentiment_scores.csv"
 SMOKE = dict(fit=3000, es=800, val=1500, max_epochs=2)          # --smoke: pipeline check only, never a result
+GRAD_DIAG_ROWS = 1024                                           # v2.05 diagnostic: fixed fit rows per measurement
 
 
 def build_model(cfg: dict, n_channels: int, n_stocks: int, n_sectors: int) -> nn.Module:
@@ -201,6 +206,24 @@ def train_one(cfg, seed, D, n_channels, n_stocks, n_sectors, max_epochs, save_pa
     best_h, best_ep_h, state_h, bad_h = [-1.0] * nh, [0] * nh, [None] * nh, [0] * nh
 
     bn_mask = np.random.default_rng(seed + 4).random(len(f["X"])) < p_blank   # fixed blanking for the recompute pass
+    gdiag = tr.get("grad_diagnostics", False)
+    if gdiag:
+        lw = cfg["loss"]
+        gw = (lw["w_trend"], lw["w_price"]) if lw["weighting"] == "fixed" else (1.0, 1.0)
+        greg = getattr(loss_fn, "reg", None) or nn.MSELoss()
+        grows = np.sort(np.random.default_rng(seed + 5).choice(len(f["X"]), min(GRAD_DIAG_ROWS, len(f["X"])), replace=False))
+
+        def gbatches():
+            for i in range(0, len(grows), tr["batch_size"]):
+                b = grows[i:i + tr["batch_size"]]
+                yield _t(f["X"][b]), _t(f["S"][b]), _t(f["G"][b]), _t(f["Y"][b]), _t(f["R"][b])
+
+        def grad_diag():
+            d = TU.shared_grad_diagnostics(model, gbatches(), gw[0], gw[1], greg)
+            return {k: round(v, 6) if "norm" in k else round(v, 4) for k, v in d.items()}
+        grad0 = grad_diag()
+        print(f"    seed {seed} before training: price share of the shared-layer pull {grad0['price_share_weighted']:.0%}, "
+              f"cosine {grad0['cosine']:+.2f} (gradient norms trend {grad0['trend_norm']:.4f}, price {grad0['price_norm']:.4f})", flush=True)
 
     def fit_batches(bs):                                            # BatchNorm recompute pass: real ids, fixed order
         for i in range(0, len(f["X"]), bs):
@@ -235,6 +258,7 @@ def train_one(cfg, seed, D, n_channels, n_stocks, n_sectors, max_epochs, save_pa
             for k, v in parts.items():
                 parts_sum[k] = parts_sum.get(k, 0.0) + v * len(b)
         lr_now = opt.param_groups[0]["lr"]
+        gd = grad_diag() if gdiag else None                          # raw (trained) weights, before EMA scoring
         if ema is not None:                                          # score the averaged weights
             TU.recompute_bn(ema.model, fit_batches(tr["batch_size"]))
             eval_model = ema.model
@@ -276,6 +300,8 @@ def train_one(cfg, seed, D, n_channels, n_stocks, n_sectors, max_epochs, save_pa
                "new_min_ce": flags["ce_improved"], "kept_epoch": sel.kept_epoch,
                "improved_horizons": [L.HORIZONS[j] for j in improved], "stall_per_horizon": list(bad_h),
                "news_blanked_share": round(n_blanked / len(f["X"]), 4), "sec": round(time.time() - t0, 1)}
+        if gd is not None:
+            row["grad_shared"] = gd
         if torch.cuda.is_available():
             row["gpu_peak_gb"] = round(torch.cuda.max_memory_allocated() / 2 ** 30, 2)
         hist.append(row)
@@ -287,6 +313,7 @@ def train_one(cfg, seed, D, n_channels, n_stocks, n_sectors, max_epochs, save_pa
                 if flags["kept_changed"] else f"      kept still epoch {sel.kept_epoch}")
         stall = f" | stall {'/'.join(map(str, bad_h))} of {tr['patience']}" if early else ""
         stall += f" | news blanked {row['news_blanked_share']:.0%}" if p_blank > 0 else ""
+        stall += f" | price pull {gd['price_share_weighted']:.0%} cos {gd['cosine']:+.2f}" if gd is not None else ""
         print(f"    seed {seed} ep {ep:>2}: lr {lr_now:.1e} loss {tot / len(f['X']):.4f} | ES F1 {es:.4f} [{per_h}] "
               f"CE {diag['ce_mean']:.4f} | up calls {up} same as last {agr}{stall}"
               + (f" ({', '.join(notes)})" if notes else "") + f"{mark}  ({time.time() - t0:.0f}s"
@@ -308,6 +335,9 @@ def train_one(cfg, seed, D, n_channels, n_stocks, n_sectors, max_epochs, save_pa
             "history": hist, "best_epoch_per_horizon": best_ep_h, "best_inner_es_per_horizon": [round(b, 4) for b in best_h]}
     if tr["selection"] == "f1_up_to_ce_min":
         meta["ce_min_epoch"], meta["ce_min"] = sel.ce_min_epoch, round(sel.ce_min, 5)
+    if gdiag:
+        meta["grad_shared_before_training"] = grad0
+        meta["grad_diag_rows"] = int(len(grows))
     if cfg["loss"]["weighting"] == "kendall":
         meta["loss_weights"] = {"w_trend": round(float(torch.exp(-loss_fn.log_var[0].detach())), 4),
                                 "w_price": round(float(torch.exp(-loss_fn.log_var[1].detach())), 4)}

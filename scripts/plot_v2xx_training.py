@@ -8,6 +8,8 @@ One row per seed, all against epoch:
   3. Inner hold-out cross-entropy per horizon, with the uniform guess (ln 3) dotted   [runs from v2.02 on]
   4. Inner hold-out price RMSE per horizon, in train-standardised units (1.0 = the size of a typical return).
   5. Share of hold-out calls unchanged from the previous epoch, per horizon             [runs from v2.02 on]
+  6. Shared-layer gradients: the price task's share of the weighted pull on the shared layers, and the cosine between
+     the two tasks' gradients (epoch 0 = before training)                                [runs with grad_diagnostics]
 The epoch whose weights were kept is marked in every panel (solid); with the v2.02 selection rule the
 lowest-cross-entropy epoch is marked too (dashed).
 A second figure (<run>_calls.png, v2.02 on) shows the predicted-class shares on the hold-out per seed and horizon
@@ -68,7 +70,8 @@ def plot(run_path: Path, out_path: Path | None = None) -> Path:
     if not runs:
         raise SystemExit(f"{run_path} has no finished seeds yet")
     has_ce = "es_ce_per_horizon" in runs[0]["history"][0]
-    panels = ["loss", "f1"] + (["ce"] if has_ce else []) + ["rmse"] + (["agree"] if has_ce else [])
+    has_grad = "grad_shared" in runs[0]["history"][0]
+    panels = ["loss", "f1"] + (["ce"] if has_ce else []) + ["rmse"] + (["agree"] if has_ce else []) + (["grad"] if has_grad else [])
     fig, axes = plt.subplots(len(runs), len(panels), figsize=(5 * len(panels), 3.6 * len(runs)), squeeze=False,
                              facecolor=SURFACE)
     name = res["config"]["name"]
@@ -97,6 +100,18 @@ def plot(run_path: Path, out_path: Path | None = None) -> Path:
             _style(ax["ce"], "inner hold-out cross-entropy (uniform guess = ln 3)", "cross-entropy")
             _horizon_lines(ax["agree"], ep, h, "es_call_agreement")
             _style(ax["agree"], "hold-out calls unchanged from previous epoch", "share")
+        if has_grad:
+            g0 = run.get("grad_shared_before_training")
+            gx = ([0] if g0 else []) + ep
+            share = ([g0["price_share_weighted"]] if g0 else []) + [e["grad_shared"]["price_share_weighted"] for e in h]
+            cos = ([g0["cosine"]] if g0 else []) + [e["grad_shared"]["cosine"] for e in h]
+            ag = ax["grad"]
+            ag.plot(gx, share, color=INK, linewidth=2)
+            ag.plot(gx, cos, color=INK2, linewidth=2, linestyle="--")
+            _end_label(ag, gx[-1], share[-1], "price share", INK)
+            _end_label(ag, gx[-1], cos[-1], "cosine", INK2)
+            ag.axhline(0, color=INK2, linewidth=1, linestyle=":")
+            _style(ag, "shared layers: price share of the pull; cosine of the two tasks' gradients", "share / cosine")
         _horizon_lines(ax["rmse"], ep, h, "es_return_rmse_std")
         _style(ax["rmse"], "inner hold-out price RMSE (train-standardised)", "RMSE")
         for a in ax.values():

@@ -191,6 +191,9 @@ def problems(cfg: dict) -> list[str]:
         elif nb > 0 and t.get("news_blank_unit") != "window":
             out.append("training.news_blank_unit must be 'window' when training.news_blank_p > 0 "
                        "(the whole look-back window's sentiment channels get the no-news fill)")
+    # v2.05 option (Siwat, 2026-10-27): per-epoch gradient diagnostic on the shared layers. Optional; absent = off.
+    if "grad_diagnostics" in t and not isinstance(t["grad_diagnostics"], bool):
+        out.append(f"training.grad_diagnostics = {t['grad_diagnostics']!r} is not valid (accepts {BOOL})")
     p = cfg.get("protocol", {})
     if len(p.get("seeds") or []) < 3:
         out.append("protocol.seeds: at least 3 seeds (hard rule 5)")

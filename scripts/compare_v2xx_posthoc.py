@@ -1,15 +1,21 @@
-"""Compare two v2.xx models from their post-hoc folders (scripts/step0_v2_03beta.py outputs) and apply v2.04's adopt rule.
+"""Compare two v2.xx models from their post-hoc folders (scripts/step0_v2_03beta.py outputs) and apply an adopt rule.
 
   python scripts/compare_v2xx_posthoc.py --base results/v2_03beta --new results/v2_04_posthoc --out results/v2_04_vs_v2_03.json
+  python scripts/compare_v2xx_posthoc.py --base results/v2_04_posthoc --new results/v2_05_posthoc --rule trend_up_price_held \
+         --base-run results/v2xx/A100/v2_04.json --new-run results/v2xx/A100/v2_05.json --out results/v2_05_vs_v2_04.json
 
 Both folders hold the same rows: inner hold-out, validation and 2026 predictions, news on (`val`, `fwd`) and news blanked
 (`val_blank`, `fwd_blank`), plus XGBoost on the fit rows (`trees.csv.gz`) and `step0.json` (the blend weight each model
 got on its own inner hold-out).
 
-Adopt rule (pre-registered, Siwat 2026-10-27; claude/log-entry-2026-10-27-v2-04-design.md), judged on the RAW models
-(the training change itself; ts + blend reported beside):
-  (a) validation, news blanked: new 3-horizon mean macro-F1 (seed mean) > base's;
-  (b) validation, news on: the paired 95% date-block interval of new - base (3-horizon mean) is not entirely below 0.
+Adopt rules (pre-registered by Siwat; judged on the RAW models, the training change itself; ts + blend reported beside):
+  blanked_up_news_on_held (v2.04, 2026-10-27; claude/log-entry-2026-10-27-v2-04-design.md), the default:
+    (a) validation, news blanked: new 3-horizon mean macro-F1 (seed mean) > base's;
+    (b) validation, news on: the paired 95% date-block interval of new - base (3-horizon mean) is not entirely below 0.
+  trend_up_price_held (v2.05, 2026-10-27; claude/log-entry-2026-10-27-v2-05-design.md); needs --base-run / --new-run:
+    (a) validation, news on: new 3-horizon mean macro-F1 (seed mean) > base's;
+    (b) price R2_OS (seed mean from the run JSON, mean of the 3 horizons): new >= base;
+    (c) validation, news blanked: the paired 95% interval of new - base (3-horizon mean) is not entirely below 0.
 Intervals: 10-day date blocks, 2,000 resamples, one set of resamples shared by every horizon, model and condition
 (the same scheme as src/posthoc.block_bootstrap). 2026 is a seen window: reported, never used.
 """
@@ -131,18 +137,42 @@ def main(argv=None):
     ap.add_argument("--base", required=True, help="post-hoc folder of the reference model (e.g. results/v2_03beta)")
     ap.add_argument("--new", required=True, help="post-hoc folder of the new model (e.g. results/v2_04_posthoc)")
     ap.add_argument("--out", required=True)
+    ap.add_argument("--rule", default="blanked_up_news_on_held", choices=("blanked_up_news_on_held", "trend_up_price_held"))
+    ap.add_argument("--base-run", default=None, help="run JSON of the reference model (price R2_OS; rule trend_up_price_held)")
+    ap.add_argument("--new-run", default=None, help="run JSON of the new model")
     a = ap.parse_args(argv)
+    if a.rule == "trend_up_price_held" and not (a.base_run and a.new_run):
+        ap.error("--rule trend_up_price_held needs --base-run and --new-run (price R2_OS)")
     base, new = load(Path(a.base)), load(Path(a.new))
     res = {"computed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "base": base["model"], "new": new["model"],
-           "blend_w": {"base": base["w"], "new": new["w"]}, "rule": __doc__.split("Adopt rule")[1].split("Intervals")[0].strip()}
+           "blend_w": {"base": base["w"], "new": new["w"]}, "rule_name": a.rule,
+           "rule": __doc__.split(f"  {a.rule}")[1].split("\n  blanked_up")[0].split("\n  trend_up")[0].split("Intervals")[0].strip()}
+    price = {}
+    for name, path in (("base", a.base_run), ("new", a.new_run)):
+        if path:
+            r = json.loads(Path(path).read_text(encoding="utf-8"))
+            assert r["config"]["name"] == {"base": base, "new": new}[name]["model"], f"{path} is not the {name} model's run"
+            per = {f"h{h}": r["summary"]["model"][f"h{h}"]["r2_os_vs_zero"]["mean"] for h in HS}
+            price[name] = {"r2_os_per_horizon": per, "r2_os_mean3": round(statistics.mean(per.values()), 5)}
+    res["price"] = price
     for period, label in (("val", "validation"), ("fwd", "forward_2026_seen")):
         sc = scores(base, new, period)
         res[label] = {f"{n}/{c}/{k}": {kk: v for kk, v in d.items() if not kk.startswith("resampled")} for (n, c, k), d in sc.items()}
         res[label]["new_minus_base"] = {f"{c}/{k}": diff(sc, c, k) for c in ("news_on", "news_blanked") for k in ("raw", "ts_blend")}
     v = res["validation"]
-    a1 = v["new/news_blanked/raw"]["mean3"] > v["base/news_blanked/raw"]["mean3"]
-    a2 = v["new_minus_base"]["news_on/raw"]["ci95"][1] >= 0
-    res["adopt"] = {"adopted": bool(a1 and a2), "a_blanked_mean_up": bool(a1), "b_news_on_not_below": bool(a2)}
+    if a.rule == "blanked_up_news_on_held":
+        a1 = v["new/news_blanked/raw"]["mean3"] > v["base/news_blanked/raw"]["mean3"]
+        a2 = v["new_minus_base"]["news_on/raw"]["ci95"][1] >= 0
+        res["adopt"] = {"adopted": bool(a1 and a2), "a_blanked_mean_up": bool(a1), "b_news_on_not_below": bool(a2)}
+        verdict = f"(a) blanked mean up: {a1}; (b) news-on not below (interval upper end >= 0): {a2}"
+    else:
+        a1 = v["new/news_on/raw"]["mean3"] > v["base/news_on/raw"]["mean3"]
+        a2 = price["new"]["r2_os_mean3"] >= price["base"]["r2_os_mean3"]
+        a3 = v["new_minus_base"]["news_blanked/raw"]["ci95"][1] >= 0
+        res["adopt"] = {"adopted": bool(a1 and a2 and a3), "a_news_on_mean_up": bool(a1), "b_price_r2_not_worse": bool(a2),
+                        "c_blanked_not_below": bool(a3)}
+        verdict = (f"(a) news-on mean up: {a1}; (b) price R2_OS not worse ({price['new']['r2_os_mean3']:+.4f} vs "
+                   f"{price['base']['r2_os_mean3']:+.4f}): {a2}; (c) blanked not below (interval upper end >= 0): {a3}")
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     Path(a.out).write_text(json.dumps(res, indent=2), encoding="utf-8")
 
@@ -158,8 +188,11 @@ def main(argv=None):
                     d = v["new_minus_base"][f"{c}/{k}"]
                     tail = f"   {d['point']:+.4f} {d['ci95']}"
                 print(f"{M['model'] + ' ' + c + ' ' + k:28s}" + "".join(f"{r['per_horizon'][f'h{h}']:8.4f}" for h in HS) + f"{r['mean3']:8.4f}{tail}")
-    print(f"\nADOPT RULE: (a) blanked mean up: {a1}; (b) news-on not below (interval upper end >= 0): {a2} -> "
-          f"{'ADOPTED' if a1 and a2 else 'not adopted'}")
+    for name, M in (("base", base), ("new", new)):
+        if name in price:
+            print(f"{M['model'] + ' price R2_OS':28s}" + "".join(f"{price[name]['r2_os_per_horizon'][f'h{h}']:+8.4f}" for h in HS)
+                  + f"{price[name]['r2_os_mean3']:+8.4f}")
+    print(f"\nADOPT RULE {a.rule}: {verdict} -> {'ADOPTED' if res['adopt']['adopted'] else 'not adopted'}")
     f = res["forward_2026_seen"]
     print("2026 (seen window, reported only), raw 3-horizon mean: " + "; ".join(
         f"{c} {base['model']} {f[f'base/{c}/raw']['mean3']:.4f} -> {new['model']} {f[f'new/{c}/raw']['mean3']:.4f}" for c in ("news_on", "news_blanked")))

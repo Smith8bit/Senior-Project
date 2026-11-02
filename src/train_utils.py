@@ -11,6 +11,8 @@
                     over all steps of the run (no early stopping with cosine, Siwat 2026-10-25).
 * holdout_diagnostics : per-horizon hold-out cross-entropy, predicted-class shares and the share of calls unchanged
                     from the previous epoch.
+* blank_windows   : v2.04 news-robust training (sentiment channels of chosen windows set to the no-news value).
+* shared_grad_diagnostics : v2.05 diagnostic, each task's gradient on the shared layers (tests/test_grad_diag.py).
 """
 from __future__ import annotations
 
@@ -103,3 +105,47 @@ def blank_windows(X: np.ndarray, rows: np.ndarray, channels: list, values) -> np
         sub[real] = v
         out[rows, :, c] = sub
     return out
+
+
+HEADS = ("trend_head.", "price_head.")
+
+
+def shared_parameters(model: nn.Module) -> list:
+    """Every trainable parameter except the two task heads: what both tasks pull on."""
+    return [p for n, p in model.named_parameters() if p.requires_grad and not n.startswith(HEADS)]
+
+
+def shared_grad_diagnostics(model: nn.Module, batches, w_trend: float, w_price: float, reg: nn.Module) -> dict:
+    """v2.05 diagnostic (Siwat, 2026-10-27). The gradient of each task's loss (trend cross-entropy; price loss `reg` on the
+    standardised log return) with respect to the SHARED parameters, averaged over the given fixed batches
+    (X, S, G, Y, R tensors). Computed in eval mode with torch.autograd.grad: no dropout, BatchNorm statistics untouched,
+    no random numbers drawn and nothing written to .grad, so training continues exactly as without it.
+    Returns the two gradient norms, the price task's share of the weighted pull
+    w_price * |g_price| / (w_trend * |g_trend| + w_price * |g_price|), and the cosine between the two gradients
+    (negative = the tasks pull the shared layers in opposite directions)."""
+    shared = shared_parameters(model)
+    was = model.training
+    model.eval()
+    gt = [torch.zeros_like(p) for p in shared]
+    gp = [torch.zeros_like(p) for p in shared]
+    n = 0
+    for X, S, G, Y, R in batches:
+        out = model(X, S, G)
+        logits = out["trend_logits"]
+        lt = nn.functional.cross_entropy(logits.reshape(-1, logits.shape[-1]), Y.reshape(-1))
+        lp = reg(out["returns"], R)
+        g1 = torch.autograd.grad(lt, shared, retain_graph=True, allow_unused=True)
+        g2 = torch.autograd.grad(lp, shared, allow_unused=True)
+        for acc_t, acc_p, x, y in zip(gt, gp, g1, g2):
+            if x is not None:
+                acc_t += x
+            if y is not None:
+                acc_p += y
+        n += 1
+    model.train(was)
+    ft = torch.cat([g.flatten() for g in gt]) / max(n, 1)
+    fp = torch.cat([g.flatten() for g in gp]) / max(n, 1)
+    nt, npr = float(ft.norm()), float(fp.norm())
+    cos = float(ft @ fp) / max(nt * npr, 1e-30)
+    share = w_price * npr / max(w_trend * nt + w_price * npr, 1e-30)
+    return {"trend_norm": nt, "price_norm": npr, "price_share_weighted": share, "cosine": cos}
