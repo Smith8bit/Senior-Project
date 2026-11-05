@@ -199,6 +199,16 @@ def problems(cfg: dict) -> list[str]:
     hz = cfg.get("protocol", {}).get("horizons")
     if not (isinstance(hz, list) and hz and all(h in PROPOSAL_HORIZONS for h in hz) and hz == sorted(set(hz))):
         out.append(f"protocol.horizons must be {PROPOSAL_HORIZONS} (proposal) or an increasing subset of it; the file has {hz!r}")
+    # v2.09 option (Siwat, 2026-11-05): class weights of the trend cross-entropy. Optional; absent = plain cross-entropy.
+    cw = cfg.get("loss", {}).get("class_weights")
+    if cw is not None:
+        n_cls = 2 if cfg.get("protocol", {}).get("label_rule") == "b2_raw_close" else 3
+        if not (isinstance(cw, list) and len(cw) == n_cls and all(isinstance(w, (int, float)) and not isinstance(w, bool) and w > 0 for w in cw)):
+            out.append(f"loss.class_weights must be {n_cls} positive numbers, one per class in class order (got {cw!r})")
+        if cfg.get("loss", {}).get("weighting") != "fixed":
+            out.append("loss.class_weights is only built for loss.weighting 'fixed'")
+        if "class_weights_rule" in cfg.get("loss", {}) and cfg["loss"]["class_weights_rule"] not in ("inverse_train_share",):
+            out.append("loss.class_weights_rule must be 'inverse_train_share' (checked against the data at run time)")
     # v2.08 option (Siwat, 2026-11-03): the B2 "true data" label. Optional; absent = "k_sigma" (the proposal's label).
     lr_ = cfg.get("protocol", {}).get("label_rule", "k_sigma")
     if lr_ not in LABEL_RULES:

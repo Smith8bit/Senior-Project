@@ -125,12 +125,15 @@ class ProposalMultiScalePatchTST(nn.Module):
 
 # ---------------------------------------------------------------- multi-task loss (proposal scope 4)
 class FixedWeightLoss(nn.Module):
-    """w_trend * CE(trend) + w_price * price loss (MSE or Huber on the train-standardised log return)."""
+    """w_trend * CE(trend) + w_price * price loss (MSE or Huber on the train-standardised log return).
+    class_weights (v2.09, optional): per-class weights of the trend cross-entropy (torch's weighted mean: sum of
+    w_y * loss / sum of w_y over the batch). None = plain cross-entropy, exactly as before."""
 
-    def __init__(self, w_trend: float, w_price: float, price_loss: str, huber_delta: float | None):
+    def __init__(self, w_trend: float, w_price: float, price_loss: str, huber_delta: float | None,
+                 class_weights: list | None = None):
         super().__init__()
         self.w_trend, self.w_price = w_trend, w_price
-        self.ce = nn.CrossEntropyLoss()
+        self.ce = nn.CrossEntropyLoss(weight=None if class_weights is None else torch.tensor(class_weights, dtype=torch.float32))
         self.reg = nn.MSELoss() if price_loss == "mse" else nn.HuberLoss(delta=huber_delta)
 
     def forward(self, out: dict, trend: torch.Tensor, returns: torch.Tensor):
@@ -157,4 +160,5 @@ class KendallLoss(UncertaintyWeightedLoss):
 def make_loss(cfg_loss: dict) -> nn.Module:
     if cfg_loss["weighting"] == "kendall":
         return KendallLoss(cfg_loss["price_loss"], cfg_loss.get("huber_delta"))
-    return FixedWeightLoss(cfg_loss["w_trend"], cfg_loss["w_price"], cfg_loss["price_loss"], cfg_loss.get("huber_delta"))
+    return FixedWeightLoss(cfg_loss["w_trend"], cfg_loss["w_price"], cfg_loss["price_loss"], cfg_loss.get("huber_delta"),
+                           cfg_loss.get("class_weights"))

@@ -30,6 +30,9 @@
   B2 (0 = down if raw close(t+1) < raw close(t), else 1 = not down), horizons [1] only. The rows are unchanged; the
   trend head has 2 outputs; floors become majority / stratified random / direction continues / reverses on B2.
   Absent = "k_sigma" (the proposal's 3-class k x sigma label).
+* v2.09 option: loss.class_weights (one positive weight per class, class order) for the trend cross-entropy. With
+  loss.class_weights_rule "inverse_train_share" the run stops unless every weight equals 1 / (K x the class's share of
+  the training rows) to 4 decimals (Siwat, 2026-11-05: B2 down 1.1504 / not down 0.8844).
 * Saves the weights of every seed. On a GPU, reports the peak memory per epoch and stops with a clear message if
   memory runs out.
 """
@@ -474,6 +477,15 @@ def main(argv=None):
                            "persistence_price_baht": {"rmse": round(float(np.sqrt(np.mean((p1 - p0) ** 2))), 4),
                                                       "mae": round(float(np.mean(np.abs(p1 - p0))), 4)}}
 
+    cw = cfg["loss"].get("class_weights")
+    if cw is not None:                                                     # v2.09: check the weights against the data
+        sh = np.bincount(tr_rows[f"y_{hz[0]}"].to_numpy(), minlength=nc) / len(tr_rows)
+        implied = (1 / (nc * sh)).round(4).tolist()
+        print(f"class weights {cw} ({dict(zip(cls_names, cw))}); training shares {sh.round(4).tolist()}, "
+              f"inverse-share weights {implied}", flush=True)
+        if cfg["loss"].get("class_weights_rule") == "inverse_train_share" and not np.allclose(cw, implied, atol=5e-5):
+            raise SystemExit(f"stop: loss.class_weights {cw} differ from 1 / (K x training share) = {implied}")
+
     out_path = ROOT / args.out
     out_path.parent.mkdir(parents=True, exist_ok=True)
     wdir = Path(args.save_weights) if args.save_weights else out_path.with_name(out_path.stem + "_weights")
@@ -493,6 +505,7 @@ def main(argv=None):
            "inner_es": {"fit_end": str(pd.Timestamp(B["fit_end"]).date()), "es_start": str(pd.Timestamp(B["es_start"]).date()),
                         "rows_fit": len(fit), "rows_es": len(es)},
            "data": info, "floors": floors, "part": bool(args.part), "runs": [],
+           "loss_class_weights": cw,
            "label": {"rule": label_rule(cfg), "classes": list(cls_names),
                      "class_shares": {k: (np.bincount(D[k]["Y"][:, 0], minlength=nc) / len(D[k]["Y"])).round(4).tolist()
                                       for k in ("fit", "es", "val")},
