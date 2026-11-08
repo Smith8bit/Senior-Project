@@ -85,6 +85,7 @@ _INPUTS_FIXED = {
     ("inputs", "sentiment"): ["p_pos", "p_neg", "p_neu"],                                       # slide 9
     ("loss", "price_target"): "log_return",                                                     # slide 9, hard rule 1
 }
+CLASS_WEIGHT_RULES = ("inverse_train_share", "inverse_train_share_squared")   # v2.09; v2.10 (squared, per horizon)
 LABEL_RULES = ("k_sigma", "b2_raw_close")   # proposal 3-class k x sigma; v2.08 B2 next-day 2-class (raw close)
 PROPOSAL_HORIZONS = [1, 5, 10]                                                                  # proposal scope 4 (slot O1)
 # Fixed by the signed proposal, the committee slides, the original paper, or earlier pre-registered protocol.
@@ -203,12 +204,16 @@ def problems(cfg: dict) -> list[str]:
     cw = cfg.get("loss", {}).get("class_weights")
     if cw is not None:
         n_cls = 2 if cfg.get("protocol", {}).get("label_rule") == "b2_raw_close" else 3
-        if not (isinstance(cw, list) and len(cw) == n_cls and all(isinstance(w, (int, float)) and not isinstance(w, bool) and w > 0 for w in cw)):
-            out.append(f"loss.class_weights must be {n_cls} positive numbers, one per class in class order (got {cw!r})")
+        n_h = len(cfg.get("protocol", {}).get("horizons", PROPOSAL_HORIZONS))
+        ok_vec = lambda v: isinstance(v, list) and len(v) == n_cls and all(
+            isinstance(w, (int, float)) and not isinstance(w, bool) and w > 0 for w in v)
+        if not (ok_vec(cw) or (isinstance(cw, list) and len(cw) == n_h and all(ok_vec(v) for v in cw))):
+            out.append(f"loss.class_weights must be {n_cls} positive numbers, one per class in class order, or one such "
+                       f"list per horizon ({n_h}) (got {cw!r})")
         if cfg.get("loss", {}).get("weighting") != "fixed":
             out.append("loss.class_weights is only built for loss.weighting 'fixed'")
-        if "class_weights_rule" in cfg.get("loss", {}) and cfg["loss"]["class_weights_rule"] not in ("inverse_train_share",):
-            out.append("loss.class_weights_rule must be 'inverse_train_share' (checked against the data at run time)")
+        if "class_weights_rule" in cfg.get("loss", {}) and cfg["loss"]["class_weights_rule"] not in CLASS_WEIGHT_RULES:
+            out.append(f"loss.class_weights_rule must be one of {CLASS_WEIGHT_RULES} (checked against the data at run time)")
     # v2.08 option (Siwat, 2026-11-03): the B2 "true data" label. Optional; absent = "k_sigma" (the proposal's label).
     lr_ = cfg.get("protocol", {}).get("label_rule", "k_sigma")
     if lr_ not in LABEL_RULES:

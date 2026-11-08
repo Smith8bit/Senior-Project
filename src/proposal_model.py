@@ -127,17 +127,30 @@ class ProposalMultiScalePatchTST(nn.Module):
 class FixedWeightLoss(nn.Module):
     """w_trend * CE(trend) + w_price * price loss (MSE or Huber on the train-standardised log return).
     class_weights (v2.09, optional): per-class weights of the trend cross-entropy (torch's weighted mean: sum of
-    w_y * loss / sum of w_y over the batch). None = plain cross-entropy, exactly as before."""
+    w_y * loss / sum of w_y over the batch). None = plain cross-entropy, exactly as before.
+    v2.10: class_weights may also be one list per horizon ([H][K]); then each horizon's cross-entropy is its own
+    weighted mean (sum of w_hy * loss / sum of w_hy over the batch) and the trend loss is the mean over horizons
+    (with all weights 1 this equals the plain cross-entropy)."""
 
     def __init__(self, w_trend: float, w_price: float, price_loss: str, huber_delta: float | None,
                  class_weights: list | None = None):
         super().__init__()
         self.w_trend, self.w_price = w_trend, w_price
-        self.ce = nn.CrossEntropyLoss(weight=None if class_weights is None else torch.tensor(class_weights, dtype=torch.float32))
+        cw = None if class_weights is None else torch.tensor(class_weights, dtype=torch.float32)
+        self.per_horizon = cw is not None and cw.dim() == 2
+        self.ce = nn.CrossEntropyLoss(weight=None if self.per_horizon else cw)
+        if self.per_horizon:
+            self.register_buffer("hw", cw)                                  # [H, K]
         self.reg = nn.MSELoss() if price_loss == "mse" else nn.HuberLoss(delta=huber_delta)
 
     def forward(self, out: dict, trend: torch.Tensor, returns: torch.Tensor):
-        l_cls = self.ce(out["trend_logits"].reshape(-1, out["trend_logits"].shape[-1]), trend.reshape(-1))
+        lg = out["trend_logits"]
+        if self.per_horizon:                                                # v2.10: one weight set per horizon
+            ce = nn.functional.cross_entropy(lg.reshape(-1, lg.shape[-1]), trend.reshape(-1), reduction="none").view_as(trend)
+            w = self.hw[torch.arange(trend.shape[1], device=trend.device)[None, :], trend]   # [N, H]
+            l_cls = ((w * ce).sum(0) / w.sum(0)).mean()
+        else:
+            l_cls = self.ce(lg.reshape(-1, lg.shape[-1]), trend.reshape(-1))
         if out["returns"] is None:                                    # no price head (v2.06): trend loss only
             return self.w_trend * l_cls, {"ce": l_cls.item()}
         l_reg = self.reg(out["returns"], returns)

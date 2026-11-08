@@ -33,6 +33,8 @@
 * v2.09 option: loss.class_weights (one positive weight per class, class order) for the trend cross-entropy. With
   loss.class_weights_rule "inverse_train_share" the run stops unless every weight equals 1 / (K x the class's share of
   the training rows) to 4 decimals (Siwat, 2026-11-05: B2 down 1.1504 / not down 0.8844).
+  v2.10: one weight list per horizon, rule "inverse_train_share_squared" = (1 / (K x share of that horizon's
+  training labels))^2 (Siwat, 2026-11-08).
 * Saves the weights of every seed. On a GPU, reports the peak memory per epoch and stops with a clear message if
   memory runs out.
 """
@@ -478,13 +480,19 @@ def main(argv=None):
                                                       "mae": round(float(np.mean(np.abs(p1 - p0))), 4)}}
 
     cw = cfg["loss"].get("class_weights")
-    if cw is not None:                                                     # v2.09: check the weights against the data
-        sh = np.bincount(tr_rows[f"y_{hz[0]}"].to_numpy(), minlength=nc) / len(tr_rows)
-        implied = (1 / (nc * sh)).round(4).tolist()
-        print(f"class weights {cw} ({dict(zip(cls_names, cw))}); training shares {sh.round(4).tolist()}, "
-              f"inverse-share weights {implied}", flush=True)
-        if cfg["loss"].get("class_weights_rule") == "inverse_train_share" and not np.allclose(cw, implied, atol=5e-5):
-            raise SystemExit(f"stop: loss.class_weights {cw} differ from 1 / (K x training share) = {implied}")
+    if cw is not None:                                    # v2.09 / v2.10: check the weights against the training shares
+        rule = cfg["loss"].get("class_weights_rule")
+        power = 2 if rule == "inverse_train_share_squared" else 1
+        per_h = isinstance(cw[0], list)
+        for j, h in enumerate(hz if per_h else hz[:1]):
+            wj = cw[j] if per_h else cw
+            sh = np.bincount(tr_rows[f"y_{h}"].to_numpy(), minlength=nc) / len(tr_rows)
+            implied = ((1 / (nc * sh)) ** power).round(4).tolist()
+            form = "1 / (K x training share)" if power == 1 else f"(1 / (K x training share))^{power}"
+            print(f"class weights{f' {h} d' if per_h else ''} {wj} ({dict(zip(cls_names, wj))}); training shares "
+                  f"{sh.round(4).tolist()}, {form} = {implied}", flush=True)
+            if rule and not np.allclose(wj, implied, atol=5e-5):
+                raise SystemExit(f"stop: loss.class_weights {wj} differ from {form} = {implied}")
 
     out_path = ROOT / args.out
     out_path.parent.mkdir(parents=True, exist_ok=True)
