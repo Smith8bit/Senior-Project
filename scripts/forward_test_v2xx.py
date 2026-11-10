@@ -99,7 +99,12 @@ def build(cfg: dict, fwd_root: Path, news_fwd: Path | None = None) -> dict:
     """Rows and inputs exactly as scripts/train_v2xx.build_data makes them, in the forward world (2026 added)."""
     with FT.forward_world(fwd_root):
         data, info, full = BT.build_dataset(root=fwd_root, return_full=True, extra="none")
-    full = FP.add_price_tech(full, cfg["inputs"])
+    mf = None
+    if FP.market_channels(cfg["inputs"]):                   # v2.11: the 2026 SET50 index rows (step0 prepare writes them)
+        mf = Path(fwd_root) / "data/raw/prices/siamchart/set50_index_forward.csv"
+        if not mf.exists():
+            raise SystemExit(f"stop: {mf} is missing; run the prepare stage (it fetches the 2026 SET50 index)")
+    full = FP.add_price_tech(full, cfg["inputs"], market_forward_file=mf)
     scores = pd.read_csv(ROOT / "data/derived/sentiment_scores.csv")
     news_stats = None
     if news_fwd:

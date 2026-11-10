@@ -9,18 +9,34 @@
 Every number (indicator periods, how a log return of Open/High/Low is taken, the no-news fill) comes from the
 run config; there are no defaults, so a missing choice fails loudly instead of being guessed.
 
+v2.11 options (Siwat, 2026-11-10; departures from the proposal's input list, recorded as an ablation of scope 2):
+  inputs.extra_technical ["plus_di", "minus_di"]: +DI and -DI of the ADX calculation (same period)  -> 2 channels
+  inputs.market "set50_index_ohlcv": the official SET50 index, OHLC as log returns against the previous index
+                 close and volume as the change of log(1 + V), like the stock's own price channels   -> 5 channels
+                 (Siamchart EOD archive, extracted to data/raw/prices/siamchart/set50_index_2019_2025.csv;
+                 2026 rows from a separate forward file, see scripts/step0_v2_03beta.py prepare)
+Channel order: price, technical, extra technical, market, sentiment. Absent keys = the v2.01-v2.10 inputs exactly.
+
 Causality: every value at day t uses data at or before t only, computed per series segment on dividend- and
 split-adjusted prices (features.adjusted_ohlc), so no value crosses a ticker changeover or a break.
 Scaling to "normalised" happens later in sequences.standardise_full, with training rows only (hard rule 3).
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
 import features as F
 
+ROOT = Path(__file__).resolve().parents[1]
+
 PRICE_CH = ["lr_open", "lr_high", "lr_low", "lr_close", "lr_volume"]
+EXTRA_TECH = ("plus_di", "minus_di")                        # v2.11
+MARKET_CH = ["set50_lr_open", "set50_lr_high", "set50_lr_low", "set50_lr_close", "set50_lr_volume"]   # v2.11
+MARKETS = ("set50_index_ohlcv",)
+SET50_INDEX_FILE = "data/raw/prices/siamchart/set50_index_2019_2025.csv"   # sha256 2363de30... (extracted 2026-11-10)
 SENT_CH = ["p_pos", "p_neg", "p_neu"]                      # slide 9 order: [pos, neg, neu]
 
 OHLC_BASES = ("own_previous", "previous_close")
@@ -35,12 +51,34 @@ def tech_channels(cfg: dict) -> list[str]:
             + ["rsi", "macd", "bb_pctb", "adx"])
 
 
+def extra_tech_channels(cfg: dict) -> list[str]:
+    ex = list(cfg.get("extra_technical") or [])
+    bad = [c for c in ex if c not in EXTRA_TECH]
+    if bad or len(set(ex)) != len(ex):
+        raise ValueError(f"inputs.extra_technical must be distinct names from {EXTRA_TECH} (got {ex})")
+    return ex
+
+
+def market_channels(cfg: dict) -> list[str]:
+    m = cfg.get("market")
+    if m is None:
+        return []
+    if m not in MARKETS:
+        raise ValueError(f"inputs.market must be one of {MARKETS} (got {m!r})")
+    return list(MARKET_CH)
+
+
 def channels(cfg: dict) -> list[str]:
-    return PRICE_CH + tech_channels(cfg) + SENT_CH
+    return PRICE_CH + tech_channels(cfg) + extra_tech_channels(cfg) + market_channels(cfg) + SENT_CH
 
 
 def groups(cfg: dict) -> dict:
-    return {"price": PRICE_CH, "technical": tech_channels(cfg), "sentiment": SENT_CH}
+    g = {"price": PRICE_CH, "technical": tech_channels(cfg)}
+    if extra_tech_channels(cfg):
+        g["technical_extra"] = extra_tech_channels(cfg)
+    if market_channels(cfg):
+        g["market"] = market_channels(cfg)
+    return g | {"sentiment": SENT_CH}
 
 
 def _wilder(x: pd.Series, n: int) -> pd.Series:
@@ -90,17 +128,50 @@ def segment_inputs(g: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     pdi, ndi = 100 * _wilder(pdm, n) / atr, 100 * _wilder(ndm, n) / atr
     dx = 100 * (pdi - ndi).abs() / (pdi + ndi).replace(0, np.nan)
     out["adx"] = _wilder(dx, n)
-    return out.replace([np.inf, -np.inf], np.nan)[PRICE_CH + tech_channels(cfg)]
+    out["plus_di"], out["minus_di"] = pdi, ndi                # v2.11 channels when inputs.extra_technical asks for them
+    return out.replace([np.inf, -np.inf], np.nan)[PRICE_CH + tech_channels(cfg) + extra_tech_channels(cfg)]
 
 
-def add_price_tech(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
-    """Add the price and technical channels to the full daily frame (index kept)."""
+def load_set50_index(forward_file: Path | str | None = None) -> pd.DataFrame:
+    """The official SET50 index (date, open, high, low, close, volume), frozen 2019-2025 file plus, for the 2026 world,
+    the forward file's rows after the frozen last day."""
+    idx = pd.read_csv(ROOT / SET50_INDEX_FILE)
+    if forward_file is not None:
+        fw = pd.read_csv(forward_file)
+        fw = fw[fw.date > idx.date.max()]
+        idx = pd.concat([idx, fw[idx.columns]], ignore_index=True)
+    idx["date"] = pd.to_datetime(idx.date.astype(str), format="%Y%m%d")
+    assert idx.date.is_unique and idx.date.is_monotonic_increasing, "SET50 index dates are not unique and sorted"
+    return idx
+
+
+def market_inputs(idx: pd.DataFrame) -> pd.DataFrame:
+    """SET50 index channels per date, built like the stock's price channels with ohlc_return_base previous_close:
+    ln(X_t / C_{t-1}) for X in O, H, L, C, and the change of ln(1 + V). The index has no breaks or adjustments."""
+    pc = idx["close"].shift(1)
+    out = pd.DataFrame({"date": idx["date"]})
+    for name, col in (("set50_lr_open", "open"), ("set50_lr_high", "high"), ("set50_lr_low", "low"), ("set50_lr_close", "close")):
+        out[name] = np.log(idx[col] / pc)
+    lv = np.log1p(idx["volume"].astype(float))
+    out["set50_lr_volume"] = lv - lv.shift(1)
+    return out.replace([np.inf, -np.inf], np.nan)
+
+
+def add_price_tech(df: pd.DataFrame, cfg: dict, market_forward_file: Path | str | None = None) -> pd.DataFrame:
+    """Add the price and technical channels (and, v2.11, the extra technical and SET50 index channels when the config
+    asks for them) to the full daily frame (index kept). market_forward_file: the 2026 SET50 index rows (forward world)."""
     for key in TECH_KEYS + ("ohlc_return_base",):
         if cfg.get(key) is None:
             raise ValueError(f"inputs.{key} is not set")
     parts = [segment_inputs(g, cfg) for _, g in df.groupby("seg_key", sort=False)]
     new = pd.concat(parts)
-    return df.drop(columns=[c for c in new.columns if c in df.columns]).join(new)
+    out = df.drop(columns=[c for c in new.columns if c in df.columns]).join(new)
+    if market_channels(cfg):
+        mk = market_inputs(load_set50_index(market_forward_file))
+        vals = mk.set_index("date")[MARKET_CH].reindex(pd.DatetimeIndex(out["date"])).to_numpy()
+        for j, c in enumerate(MARKET_CH):                      # a stock day with no index row stays missing (-> 0 later)
+            out[c] = vals[:, j]
+    return out
 
 
 def sentiment_probs(scores: pd.DataFrame, rows: pd.DataFrame, no_news: str) -> pd.DataFrame:

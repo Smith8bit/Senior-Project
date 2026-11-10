@@ -16,6 +16,9 @@ Adopt rules (pre-registered by Siwat; judged on the RAW models, the training cha
     (a) validation, news on: new 3-horizon mean macro-F1 (seed mean) > base's;
     (b) price R2_OS (seed mean from the run JSON, mean of the 3 horizons): new >= base;
     (c) validation, news blanked: the paired 95% interval of new - base (3-horizon mean) is not entirely below 0.
+  mean_held_any_horizon_up (v2.11, 2026-11-10; claude/log-entry-2026-11-10-v2-11-design.md):
+    validation, news on: (a) the paired 95% interval of new - base (mean over the horizons) is not entirely below 0
+    (upper end >= 0), and (b) at least one horizon's paired 95% interval is entirely above 0.
   h1_up_significant (v2.07, 2026-11-02; claude/log-entry-2026-11-02-v2-07-design.md):
     (a) validation, news on, 1-day horizon: the paired 95% interval of new - base macro-F1 (seed mean) is entirely above 0.
   trend_up_significant (v2.06, 2026-11-02; claude/log-entry-2026-11-02-v2-06-design.md):
@@ -144,7 +147,8 @@ def main(argv=None):
     ap.add_argument("--new", required=True, help="post-hoc folder of the new model (e.g. results/v2_04_posthoc)")
     ap.add_argument("--out", required=True)
     ap.add_argument("--rule", default="blanked_up_news_on_held",
-                    choices=("blanked_up_news_on_held", "trend_up_price_held", "trend_up_significant", "h1_up_significant"))
+                    choices=("blanked_up_news_on_held", "trend_up_price_held", "trend_up_significant", "h1_up_significant",
+                             "mean_held_any_horizon_up"))
     ap.add_argument("--base-run", default=None, help="run JSON of the reference model (price R2_OS; rule trend_up_price_held)")
     ap.add_argument("--new-run", default=None, help="run JSON of the new model")
     a = ap.parse_args(argv)
@@ -158,7 +162,7 @@ def main(argv=None):
     base, new = load(Path(a.base)), load(Path(a.new))
     res = {"computed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "base": base["model"], "new": new["model"],
            "blend_w": {"base": base["w"], "new": new["w"]}, "rule_name": a.rule,
-           "rule": __doc__.split(f"  {a.rule} ")[1].split("\n  blanked_up")[0].split("\n  trend_up")[0].split("\n  h1_up")[0].split("\nOnly the horizons")[0].split("Intervals")[0].strip()}
+           "rule": __doc__.split(f"  {a.rule} ")[1].split("\n  blanked_up")[0].split("\n  trend_up")[0].split("\n  h1_up")[0].split("\n  mean_held")[0].split("\nOnly the horizons")[0].split("Intervals")[0].strip()}
     price = {}
     for name, path in (("base", a.base_run), ("new", a.new_run)):
         if path:
@@ -177,6 +181,14 @@ def main(argv=None):
         a2 = v["new_minus_base"]["news_on/raw"]["ci95"][1] >= 0
         res["adopt"] = {"adopted": bool(a1 and a2), "a_blanked_mean_up": bool(a1), "b_news_on_not_below": bool(a2)}
         verdict = f"(a) blanked mean up: {a1}; (b) news-on not below (interval upper end >= 0): {a2}"
+    elif a.rule == "mean_held_any_horizon_up":
+        d = v["new_minus_base"]["news_on/raw"]
+        a1 = d["ci95"][1] >= 0
+        up = [h for h in HS if d["per_horizon"][f"h{h}"]["ci95"][0] > 0]
+        a2 = bool(up)
+        res["adopt"] = {"adopted": bool(a1 and a2), "a_mean_not_below_0": bool(a1), "b_horizons_above_0": [f"h{h}" for h in up]}
+        verdict = (f"(a) news-on mean {d['point']:+.4f}, interval {d['ci95']} not entirely below 0: {a1}; (b) horizons with the "
+                   f"interval entirely above 0: {[f'{h} d' for h in up] or 'none'}: {a2}")
     elif a.rule == "h1_up_significant":
         d1 = v["new_minus_base"]["news_on/raw"]["per_horizon"]["h1"]
         a1 = d1["ci95"][0] > 0

@@ -85,6 +85,8 @@ _INPUTS_FIXED = {
     ("inputs", "sentiment"): ["p_pos", "p_neg", "p_neu"],                                       # slide 9
     ("loss", "price_target"): "log_return",                                                     # slide 9, hard rule 1
 }
+EXTRA_TECHNICAL = ("plus_di", "minus_di")                 # v2.11 (src/features_proposal.EXTRA_TECH)
+MARKET_INPUTS = ("set50_index_ohlcv",)                     # v2.11 (src/features_proposal.MARKETS)
 CLASS_WEIGHT_RULES = ("inverse_train_share", "inverse_train_share_squared")   # v2.09; v2.10 (squared, per horizon)
 LABEL_RULES = ("k_sigma", "b2_raw_close")   # proposal 3-class k x sigma; v2.08 B2 next-day 2-class (raw close)
 PROPOSAL_HORIZONS = [1, 5, 10]                                                                  # proposal scope 4 (slot O1)
@@ -200,6 +202,17 @@ def problems(cfg: dict) -> list[str]:
     hz = cfg.get("protocol", {}).get("horizons")
     if not (isinstance(hz, list) and hz and all(h in PROPOSAL_HORIZONS for h in hz) and hz == sorted(set(hz))):
         out.append(f"protocol.horizons must be {PROPOSAL_HORIZONS} (proposal) or an increasing subset of it; the file has {hz!r}")
+    # v2.11 options (Siwat, 2026-11-10): +DI / -DI and the official SET50 index as extra inputs (departure from the
+    # proposal's input list; recorded as an ablation of scope 2). Optional; absent = the v2.01-v2.10 inputs.
+    inp = cfg.get("inputs", {})
+    if "extra_technical" in inp:
+        ex = inp["extra_technical"]
+        if not (isinstance(ex, list) and ex and len(set(ex)) == len(ex) and all(e in EXTRA_TECHNICAL for e in ex)):
+            out.append(f"inputs.extra_technical must be a non-empty list of distinct names from {EXTRA_TECHNICAL} (got {ex!r})")
+    if "market" in inp and inp["market"] not in MARKET_INPUTS:
+        out.append(f"inputs.market must be one of {MARKET_INPUTS} (got {inp['market']!r})")
+    if ("extra_technical" in inp or "market" in inp) and fam != "proposal_msp":
+        out.append("inputs.extra_technical / inputs.market are only built for model.family proposal_msp")
     # v2.09 option (Siwat, 2026-11-05): class weights of the trend cross-entropy. Optional; absent = plain cross-entropy.
     cw = cfg.get("loss", {}).get("class_weights")
     if cw is not None:

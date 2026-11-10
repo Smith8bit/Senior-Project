@@ -101,10 +101,71 @@ def paths(args):
 
 
 # ======================================================================================================== prepare
+SET50_FWD = "data/raw/prices/siamchart/set50_index_forward.csv"     # v2.11: 2026 SET50 index rows inside fwd_root
+SET50_CLOSE_TOL, SET50_CLOSE_SHARE = 0.005, 0.95                     # overlap check, Oct-Dec 2025, vs the frozen index
+
+
+def _needs_set50(args) -> bool:
+    rj = Path(args.run_json)
+    return rj.exists() and bool(FP.market_channels(json.loads(rj.read_text(encoding="utf-8"))["config"]["inputs"]))
+
+
+def set50_forward(args, P) -> None:
+    """v2.11: the SET50 index for 2026 (the frozen file ends 2025-12-30). Source: --set50-forward-csv (columns symbol,
+    date, open, high, low, close, volume, e.g. from a fresh Siamchart archive) or Yahoo ^SET50.BK. Checked on the
+    Oct-Dec 2025 overlap with the frozen index: closes within 0.5% on >= 95% of days, else stop. Volume is rescaled by the
+    median overlap ratio so the first 2026 volume change compares like with like. Only rows after 2025-12-30 are used."""
+    inp = P["out"] / "inputs"
+    raw = inp / "set50_index_forward_raw.csv"
+    if args.set50_forward_csv:
+        fw = pd.read_csv(args.set50_forward_csv)
+        src = f"file {Path(args.set50_forward_csv).name} sha256 {sha(Path(args.set50_forward_csv))[:16]}"
+        fw.to_csv(raw, index=False)
+    elif raw.exists() and not args.redo:
+        fw, src = pd.read_csv(raw), "saved " + raw.name
+    else:
+        res = FT.yahoo_chart("^SET50", "2025-10-01", pd.Timestamp.now(tz="Asia/Bangkok").strftime("%Y-%m-%d"))
+        q = res["indicators"]["quote"][0]
+        fw = pd.DataFrame({"symbol": "SET50", "date": [FT._bkk_ymd(t) for t in res["timestamp"]],
+                           **{k: q[k] for k in ("open", "high", "low", "close", "volume")}}).dropna(subset=["open", "high", "low", "close"])
+        fw = fw.drop_duplicates("date", keep="last").sort_values("date").reset_index(drop=True)
+        src = "Yahoo chart API ^SET50.BK, fetched " + datetime.now(timezone.utc).isoformat(timespec="seconds")
+        fw.to_csv(raw, index=False)
+    fw["date"] = fw["date"].astype(int)
+    frozen = pd.read_csv(ROOT / FP.SET50_INDEX_FILE)
+    ov = fw[(fw.date >= 20251001) & (fw.date <= int(frozen.date.max()))].merge(frozen, on="date", suffixes=("", "_f"))
+    share = float((abs(ov.close / ov.close_f - 1) < SET50_CLOSE_TOL).mean()) if len(ov) else 0.0
+    vr = float((ov.volume / ov.volume_f).median()) if len(ov) else float("nan")
+    say(f"SET50 forward index ({src}): {len(ov)} overlap days Oct-Dec 2025, closes within 0.5%: {share:.1%}, "
+        f"median volume ratio {vr:.4f}")
+    if len(ov) < 20 or share < SET50_CLOSE_SHARE or not np.isfinite(vr) or vr <= 0:
+        raise SystemExit("stop: the 2026 SET50 index does not match the frozen index on Oct-Dec 2025 "
+                         "(give --set50-forward-csv with a checked file)")
+    new = fw[fw.date > int(frozen.date.max())].copy()
+    new["volume"] = (new["volume"].astype(float) / vr).round()
+    px = pd.read_csv(inp / "forward_prices.csv")
+    days = px[px.date > int(frozen.date.max())].groupby("date").symbol.size()
+    days = sorted(days[days >= 30].index)
+    miss = sorted(set(days) - set(new.date))
+    say(f"SET50 forward rows: {len(new)} after 2025-12-30 (last {new.date.max() if len(new) else None}); "
+        f"2026 trading days without an index row: {len(miss)} {miss[:5]}")
+    if len(new) == 0 or len(miss) > 2:
+        raise SystemExit("stop: the 2026 SET50 index does not cover the 2026 trading days")
+    dst = P["fwd_root"] / SET50_FWD
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    new[["symbol", "date", "open", "high", "low", "close", "volume"]].to_csv(dst, index=False)
+    meta = {"source": src, "overlap_days": int(len(ov)), "overlap_close_within_0.5pct": round(share, 4),
+            "volume_rescale": round(vr, 6), "rows_2026": int(len(new)), "days_missing": [int(d) for d in miss],
+            "sha256": sha(dst)}
+    (inp / "set50_index_forward_meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+
+
 def prepare(args):
     P = paths(args)
     P["out"].mkdir(parents=True, exist_ok=True)
     if P["manifest"].exists() and (P["fwd_root"] / "forward_config.json").exists() and not args.redo:
+        if _needs_set50(args) and not (P["fwd_root"] / SET50_FWD).exists():
+            set50_forward(args, P)
         say("prepare: done (pass --redo to rebuild)"); return
     inp = P["out"] / "inputs"
     src = Path(args.fwd_inputs)
@@ -121,6 +182,8 @@ def prepare(args):
             raise SystemExit(f"stop: {f} differs from the copy the 2026 forward tests used ({sha(inp / f)[:12]} vs {meta[k][:12]})")
     # the same call the v2.03 forward notebooks made (no extra breaks), so the 2026 rows are the same rows
     FT.main(["prepare", "--fwd-root", str(P["fwd_root"]), "--out-dir", str(P["out"]), "--price-source", "yahoo"])
+    if _needs_set50(args):                                            # v2.11: the 2026 SET50 index
+        set50_forward(args, P)
 
 
 # ======================================================================================================== shared world
@@ -699,6 +762,8 @@ def main(argv=None):
     ap.add_argument("--out-dir", default=str(ROOT / "results/v2_03beta"))
     ap.add_argument("--label", default=NAME, help="name printed and stored for this post-hoc run (e.g. 'v2.04 post-hoc')")
     ap.add_argument("--redo", action="store_true")
+    ap.add_argument("--set50-forward-csv", default=None,
+                    help="v2.11: 2026 SET50 index rows (symbol,date,open,high,low,close,volume) instead of Yahoo ^SET50.BK")
     ap.add_argument("--core-only", action="store_true", help="predict: inner hold-out, validation and 2026 only (no placebo)")
     ap.add_argument("--smoke-rows", type=int, default=0, help="plumbing test only: this many rows per part")
     args = ap.parse_args(argv)
